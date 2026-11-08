@@ -403,24 +403,15 @@ class Pi0RL(EnvIO, Pi0):
             cache[key] = rl_sampler.get_timesteps(self.num_steps, device).tolist()
         return cache[key]
 
-    def _predict_train_device(
-        self,
-        observation: Observation,
-        chosen: int,
-        compute_values: bool,
-        timesteps_host: list[float],
-    ) -> dict[str, torch.Tensor]:
-        """Device part of ``_predict_train`` for a known ``chosen`` step (capturable)."""
+    def _device_prefix(self, observation: Observation) -> dict[str, Any]:
+        """Device part of ``_predict_train`` before the denoising loop (capturable)."""
         rl_cfg = self.rl_cfg
-        device = self.device
         B = observation.state.shape[0]
-        num_steps = self.num_steps
-
         noise = torch.randn(
             B,
             self.action_horizon,
             self.model_action_dim,
-            device=device,
+            device=self.device,
             dtype=torch.float32,
         )
         prefix_out, prefix_mask, kv_cache = self.build_prefix_cache(observation)
@@ -429,6 +420,28 @@ class Pi0RL(EnvIO, Pi0):
             vlm_value = rl_sampler.value_from_prefix(
                 self.value_head, prefix_out, prefix_mask, mode=rl_cfg.value_vlm_mode
             )
+        return {
+            "noise": noise,
+            "prefix_mask": prefix_mask,
+            "kv_cache": kv_cache,
+            "vlm_value": vlm_value,
+        }
+
+    def _device_suffix(
+        self,
+        observation: Observation,
+        pre: dict[str, Any],
+        chosen: int,
+        compute_values: bool,
+        timesteps_host: list[float],
+    ) -> dict[str, torch.Tensor]:
+        """Denoising loop of ``_predict_train`` for a known ``chosen`` step (capturable)."""
+        rl_cfg = self.rl_cfg
+        device = self.device
+        B = observation.state.shape[0]
+        num_steps = self.num_steps
+        noise, prefix_mask = pre["noise"], pre["prefix_mask"]
+        kv_cache, vlm_value = pre["kv_cache"], pre["vlm_value"]
         denoise_inds = torch.full(
             (B, num_steps), chosen, device=device, dtype=torch.long
         )
@@ -513,18 +526,28 @@ class Pi0RL(EnvIO, Pi0):
         np_state = np.random.get_state()
         graphs = {}
         try:
+            # Eager warmup of every variant (compiles, library handles).
             side = torch.cuda.Stream(device=device)
-            for chosen in range(hi + 1):
-                side.wait_stream(torch.cuda.current_stream(device))
-                with torch.cuda.stream(side):
-                    self._predict_train_device(
-                        static_obs, chosen, compute_values, timesteps_host
+            side.wait_stream(torch.cuda.current_stream(device))
+            with torch.cuda.stream(side):
+                for chosen in range(hi + 1):
+                    pre = self._device_prefix(static_obs)
+                    self._device_suffix(
+                        static_obs, pre, chosen, compute_values, timesteps_host
                     )
-                torch.cuda.current_stream(device).wait_stream(side)
+                    del pre
+            torch.cuda.current_stream(device).wait_stream(side)
+            # Two graphs per request: the prefix (shared by every chosen step),
+            # then the denoising loop of the chosen step. Launching the second
+            # while the first runs hides its launch cost.
+            prefix_graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(prefix_graph, pool=self._graph_pool):
+                pre = self._device_prefix(static_obs)
+            for chosen in range(hi + 1):
                 graph = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(graph, pool=self._graph_pool):
-                    out = self._predict_train_device(
-                        static_obs, chosen, compute_values, timesteps_host
+                    out = self._device_suffix(
+                        static_obs, pre, chosen, compute_values, timesteps_host
                     )
                 graphs[chosen] = (graph, out)
             torch.cuda.synchronize(device)
@@ -536,7 +559,12 @@ class Pi0RL(EnvIO, Pi0):
         banks = self.__dict__.setdefault("_graph_banks", {})
         while len(banks) >= self._GRAPH_MAX_BANKS:
             banks.pop(next(iter(banks)))
-        bank = {"static": static, "graphs": graphs, "param_sig": param_sig}
+        bank = {
+            "static": static,
+            "prefix": (prefix_graph, pre),
+            "graphs": graphs,
+            "param_sig": param_sig,
+        }
         banks[key] = bank
         return bank
 
@@ -570,6 +598,7 @@ class Pi0RL(EnvIO, Pi0):
         for k, v in flat.items():
             if v is not None:
                 bank["static"][k].copy_(v)
+        bank["prefix"][0].replay()
         graph, out = bank["graphs"][chosen]
         graph.replay()
         res = {k: v.clone() for k, v in out.items()}
