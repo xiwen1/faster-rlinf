@@ -367,7 +367,7 @@ class Attention(nn.Module):
         masked_logits = torch.where(
             mask_for_logits,
             logits,
-            torch.tensor(big_neg, dtype=logits.dtype, device=logits.device),
+            _const_tensor(big_neg, logits.dtype, logits.device),
         )
 
         probs = F.softmax(masked_logits, dim=-1).to(dtype)
@@ -674,6 +674,24 @@ class Module(nn.Module):
                 outputs.append(None)
 
         return outputs, kv_cache
+
+
+_CONST_CACHE: dict = {}
+
+
+def _const_tensor(value: float, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    """``torch.tensor(value, dtype, device)``, created once per (value, dtype, device).
+
+    Same 0-dim device tensor (same bits) as building it on every call, without a
+    blocking host-to-device copy per attention layer (and capturable in a CUDA graph
+    once created).
+    """
+    key = (value, dtype, device)
+    t = _CONST_CACHE.get(key)
+    if t is None:
+        t = torch.tensor(value, dtype=dtype, device=device)
+        _CONST_CACHE[key] = t
+    return t
 
 
 def _apply_rope_eager(

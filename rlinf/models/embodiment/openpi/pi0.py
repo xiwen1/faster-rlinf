@@ -247,7 +247,11 @@ class Pi0(model.BaseModel):
 
         tokens = torch.cat(tokens, dim=1)
         input_mask = torch.cat(input_mask, dim=1)
-        ar_mask = torch.tensor(ar_mask, device=tokens.device)
+        if any(ar_mask):
+            ar_mask = torch.tensor(ar_mask, device=tokens.device)
+        else:
+            # Same values and dtype as torch.tensor([False] * n), built on device.
+            ar_mask = torch.zeros(len(ar_mask), dtype=torch.bool, device=tokens.device)
         return tokens, input_mask, ar_mask
 
     def embed_suffix(
@@ -329,10 +333,12 @@ class Pi0(model.BaseModel):
         ar_mask = torch.zeros(
             input_mask.shape[1], dtype=torch.bool, device=tokens.device
         )
+        # fill_ on the view: same values as item assignment, without the
+        # host-to-device copy of a CPU scalar (capturable in a CUDA graph).
         if not self.pi05:
-            ar_mask[:2] = True
+            ar_mask[:2].fill_(True)
         else:
-            ar_mask[0] = True
+            ar_mask[0:1].fill_(True)
 
         return tokens, input_mask, ar_mask, adarms_cond
 
