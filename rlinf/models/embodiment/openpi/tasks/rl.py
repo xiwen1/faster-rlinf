@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import random
 from typing import Any, Literal, Sequence
 
@@ -34,6 +35,9 @@ from rlinf.models.embodiment.openpi.pi0 import Pi0
 from rlinf.models.embodiment.openpi.pi0_config import Pi0Config
 from rlinf.models.embodiment.openpi.sampling import rl_sampler
 from rlinf.models.embodiment.openpi.transforms.env import repack_env_obs
+
+# RLINF_OPENPI_CUDA_GRAPHS=0 turns the CUDA-graph rollout fast path off.
+_CUDA_GRAPHS = os.environ.get("RLINF_OPENPI_CUDA_GRAPHS", "1") != "0"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -168,9 +172,14 @@ class Pi0RL(EnvIO, Pi0):
         )
         if mode == "eval":
             return self._predict_eval(observation, noise=noise, rng=rng)
-        actions, result = self._predict_train(
-            observation, noise=noise, rng=rng, compute_values=compute_values
-        )
+        if self._graph_fast_path_ok(noise, rng):
+            actions, result = self._predict_train_graphed(
+                observation, compute_values=compute_values
+            )
+        else:
+            actions, result = self._predict_train(
+                observation, noise=noise, rng=rng, compute_values=compute_values
+            )
         # Match OpenPI: stash raw env obs so the actor can re-transform.
         result["forward_inputs"].update(_clone_replay_obs(repacked))
         return actions, result
@@ -314,6 +323,270 @@ class Pi0RL(EnvIO, Pi0):
         return actions, {
             "prev_logprobs": log_probs_picked,
             "prev_values": prev_values,
+            "forward_inputs": forward_inputs,
+            "model_actions": x_0,
+        }
+
+    # ------------------------------------------------------------------
+    # CUDA-graph fast path of the rollout (mode="train").
+    #
+    # The device part of ``_predict_train`` (noise draw, prefix, value head,
+    # the denoising loop, the log-probabilities) is replayed from CUDA graphs
+    # captured once per input signature and per denoise step chosen by
+    # ``random.randint``. The graphs launch exactly the kernels of the eager
+    # path on the same inputs, and draw the same noise from the global CUDA
+    # generator in the same order (graph-safe philox offsets), so every output
+    # is bitwise the eager one. Only the default configuration takes it (no
+    # caller noise / generator, no joint logprob, no NFT, no learned noise,
+    # eval mode, no grad); everything else runs ``_predict_train``.
+    # ------------------------------------------------------------------
+    _GRAPH_MAX_BANKS = 8
+
+    def _graph_fast_path_ok(self, noise, rng) -> bool:
+        rl_cfg = self.rl_cfg
+        return (
+            _CUDA_GRAPHS
+            and noise is None
+            and rng is None
+            and not self.training
+            and not torch.is_grad_enabled()
+            and not rl_cfg.joint_logprob
+            and not rl_cfg.is_nft
+            and rl_cfg.noise_method in ("flow_sde", "flow_ode", "flow_cps")
+            and torch.cuda.is_available()
+            and self.device.type == "cuda"
+            and not torch.cuda.is_current_stream_capturing()
+        )
+
+    @staticmethod
+    def _flatten_observation(observation: Observation) -> dict[str, Any]:
+        flat: dict[str, Any] = {}
+        for k, v in observation.images.items():
+            flat[f"images/{k}"] = v
+        for k, v in observation.image_masks.items():
+            flat[f"image_masks/{k}"] = v
+        for name in (
+            "state",
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
+            "pcd_xyz",
+        ):
+            flat[name] = getattr(observation, name)
+        return flat
+
+    @staticmethod
+    def _unflatten_observation(flat: dict[str, Any]) -> Observation:
+        images = {k[len("images/") :]: v for k, v in flat.items() if k.startswith("images/")}
+        masks = {
+            k[len("image_masks/") :]: v
+            for k, v in flat.items()
+            if k.startswith("image_masks/")
+        }
+        return Observation(
+            images=images,
+            image_masks=masks,
+            state=flat["state"],
+            tokenized_prompt=flat["tokenized_prompt"],
+            tokenized_prompt_mask=flat["tokenized_prompt_mask"],
+            token_ar_mask=flat["token_ar_mask"],
+            token_loss_mask=flat["token_loss_mask"],
+            pcd_xyz=flat["pcd_xyz"],
+        )
+
+    def _timesteps_host(self, device) -> list[float]:
+        cache = self.__dict__.setdefault("_timesteps_host_cache", {})
+        key = (self.num_steps, str(device))
+        if key not in cache:
+            # The exact fp32 values the eager loop reads with ``.item()``.
+            cache[key] = rl_sampler.get_timesteps(self.num_steps, device).tolist()
+        return cache[key]
+
+    def _predict_train_device(
+        self,
+        observation: Observation,
+        chosen: int,
+        compute_values: bool,
+        timesteps_host: list[float],
+    ) -> dict[str, torch.Tensor]:
+        """Device part of ``_predict_train`` for a known ``chosen`` step (capturable)."""
+        rl_cfg = self.rl_cfg
+        device = self.device
+        B = observation.state.shape[0]
+        num_steps = self.num_steps
+
+        noise = torch.randn(
+            B,
+            self.action_horizon,
+            self.model_action_dim,
+            device=device,
+            dtype=torch.float32,
+        )
+        prefix_out, prefix_mask, kv_cache = self.build_prefix_cache(observation)
+        vlm_value = None
+        if rl_cfg.add_value_head and rl_cfg.value_after_vlm:
+            vlm_value = rl_sampler.value_from_prefix(
+                self.value_head, prefix_out, prefix_mask, mode=rl_cfg.value_vlm_mode
+            )
+        denoise_inds = torch.full(
+            (B, num_steps), chosen, device=device, dtype=torch.long
+        )
+        idx_step = torch.empty(B, device=device, dtype=torch.long)
+        chains = [noise]
+        log_probs: list[torch.Tensor] = []
+        suffix_values: list[torch.Tensor] = []
+        x_t = noise
+        for idx in range(num_steps):
+            method = rl_cfg.noise_method if idx == chosen else "flow_ode"
+            t_val = timesteps_host[idx]
+            t_tensor = torch.full((B,), t_val, device=device, dtype=torch.float32)
+            suffix_act = self.run_suffix(
+                observation, x_t, t_tensor, kv_cache, prefix_mask
+            )
+            v_t = self.velocity_from_suffix(suffix_act).to(torch.float32)
+            idx_step.fill_(idx)
+            x_t_mean, x_t_std = rl_sampler.sample_mean_var(
+                x_t.to(torch.float32),
+                v_t,
+                idx_step,
+                noise_method=method,
+                noise_level=rl_cfg.noise_level,
+                num_steps=num_steps,
+                noise_std=None,
+            )
+            step_noise = torch.randn(x_t.shape, device=device, dtype=torch.float32)
+            x_t = x_t_mean + step_noise * x_t_std
+            log_probs.append(rl_sampler.gaussian_logprob(x_t, x_t_mean, x_t_std))
+            chains.append(x_t)
+            if compute_values and rl_cfg.add_value_head and not rl_cfg.value_after_vlm:
+                suffix_values.append(
+                    rl_sampler.value_from_suffix(
+                        self.value_head,
+                        suffix_act,
+                        action_chunk=self.action_chunk,
+                        chunk_critic_input=rl_cfg.chunk_critic_input,
+                        detach_critic_input=rl_cfg.detach_critic_input,
+                    )
+                )
+
+        x_0 = x_t
+        chains_tensor = torch.stack(chains, dim=1).contiguous()
+        log_probs_stacked = torch.stack(log_probs, dim=1)
+        log_probs_stacked = log_probs_stacked[
+            :, :, : self.action_chunk, : self.action_env_dim
+        ]
+        log_probs_picked = log_probs_stacked[
+            torch.arange(B, device=device), denoise_inds[:, 0]
+        ]
+        log_probs_picked = log_probs_picked.float().contiguous()
+        if vlm_value is not None:
+            prev_values = vlm_value[:, None].float().contiguous()
+        elif suffix_values:
+            prev_values = torch.stack(suffix_values, dim=1).mean(dim=1, keepdim=True)
+        else:
+            prev_values = torch.zeros((B, 1), device=device, dtype=torch.float32)
+        return {
+            "chains": chains_tensor,
+            "denoise_inds": denoise_inds,
+            "prev_logprobs": log_probs_picked,
+            "prev_values": prev_values,
+            "x_0": x_0,
+        }
+
+    def _param_signature(self) -> tuple:
+        return tuple(p.data_ptr() for p in self.parameters())
+
+    def _build_graph_bank(self, flat, compute_values, hi, key, param_sig):
+        device = self.device
+        static = {
+            k: (v.clone() if torch.is_tensor(v) else v) for k, v in flat.items()
+        }
+        static_obs = self._unflatten_observation(static)
+        timesteps_host = self._timesteps_host(device)
+        if getattr(self, "_graph_pool", None) is None:
+            self._graph_pool = torch.cuda.graph_pool_handle()
+        # Warmup and capture must not consume any random number of the caller.
+        cpu_state = torch.get_rng_state()
+        cuda_state = torch.cuda.get_rng_state(device)
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        graphs = {}
+        try:
+            side = torch.cuda.Stream(device=device)
+            for chosen in range(hi + 1):
+                side.wait_stream(torch.cuda.current_stream(device))
+                with torch.cuda.stream(side):
+                    self._predict_train_device(
+                        static_obs, chosen, compute_values, timesteps_host
+                    )
+                torch.cuda.current_stream(device).wait_stream(side)
+                graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(graph, pool=self._graph_pool):
+                    out = self._predict_train_device(
+                        static_obs, chosen, compute_values, timesteps_host
+                    )
+                graphs[chosen] = (graph, out)
+            torch.cuda.synchronize(device)
+        finally:
+            torch.set_rng_state(cpu_state)
+            torch.cuda.set_rng_state(cuda_state, device)
+            random.setstate(py_state)
+            np.random.set_state(np_state)
+        banks = self.__dict__.setdefault("_graph_banks", {})
+        while len(banks) >= self._GRAPH_MAX_BANKS:
+            banks.pop(next(iter(banks)))
+        bank = {"static": static, "graphs": graphs, "param_sig": param_sig}
+        banks[key] = bank
+        return bank
+
+    def _predict_train_graphed(
+        self, observation: Observation, *, compute_values: bool
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        rl_cfg = self.rl_cfg
+        observation = preprocess_observation(observation, train=False)
+        B = observation.state.shape[0]
+        num_steps = self.num_steps
+        hi = max(num_steps - 2 if rl_cfg.ignore_last else num_steps - 1, 0)
+        flat = self._flatten_observation(observation)
+        key = (
+            bool(compute_values),
+            num_steps,
+            tuple(
+                (k, tuple(v.shape), v.dtype, v.device) if torch.is_tensor(v) else (k, v)
+                for k, v in flat.items()
+            ),
+        )
+        if any(not torch.is_tensor(v) and v is not None for v in flat.values()):
+            return self._predict_train(
+                observation, noise=None, rng=None, compute_values=compute_values
+            )
+        param_sig = self._param_signature()
+        bank = self.__dict__.get("_graph_banks", {}).get(key)
+        if bank is None or bank["param_sig"] != param_sig:
+            bank = self._build_graph_bank(flat, compute_values, hi, key, param_sig)
+
+        chosen = random.randint(0, hi)
+        for k, v in flat.items():
+            if v is not None:
+                bank["static"][k].copy_(v)
+        graph, out = bank["graphs"][chosen]
+        graph.replay()
+        res = {k: v.clone() for k, v in out.items()}
+
+        x_0 = res["x_0"]
+        actions = self.decode_actions(x_0, observation.state)
+        forward_inputs: dict[str, torch.Tensor] = {
+            "chains": res["chains"],
+            "denoise_inds": res["denoise_inds"],
+            "tokenized_prompt": observation.tokenized_prompt.contiguous(),
+            "tokenized_prompt_mask": observation.tokenized_prompt_mask.contiguous(),
+            "action": actions.reshape(B, -1).contiguous(),
+            "model_action": x_0.reshape(B, -1).contiguous(),
+        }
+        return actions, {
+            "prev_logprobs": res["prev_logprobs"],
+            "prev_values": res["prev_values"],
             "forward_inputs": forward_inputs,
             "model_actions": x_0,
         }
