@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import random
 from typing import Any, Literal, Sequence
@@ -35,6 +36,8 @@ from rlinf.models.embodiment.openpi.pi0 import Pi0
 from rlinf.models.embodiment.openpi.pi0_config import Pi0Config
 from rlinf.models.embodiment.openpi.sampling import rl_sampler
 from rlinf.models.embodiment.openpi.transforms.env import repack_env_obs
+
+logger = logging.getLogger(__name__)
 
 # RLINF_OPENPI_CUDA_GRAPHS=0 turns the CUDA-graph rollout fast path off.
 _CUDA_GRAPHS = os.environ.get("RLINF_OPENPI_CUDA_GRAPHS", "1") != "0"
@@ -341,6 +344,10 @@ class Pi0RL(EnvIO, Pi0):
     # eval mode, no grad); everything else runs ``_predict_train``.
     # ------------------------------------------------------------------
     _GRAPH_MAX_BANKS = 8
+    # Noise methods verified capturable and bitwise equal to ``_predict_train``.
+    # (flow_cps is not: its ``torch.as_tensor(noise_level, device=...)`` is a
+    # host-to-device copy, which a CUDA graph cannot capture.)
+    _GRAPH_NOISE_METHODS = ("flow_sde", "flow_ode")
 
     def _graph_fast_path_ok(self, noise, rng) -> bool:
         rl_cfg = self.rl_cfg
@@ -352,7 +359,7 @@ class Pi0RL(EnvIO, Pi0):
             and not torch.is_grad_enabled()
             and not rl_cfg.joint_logprob
             and not rl_cfg.is_nft
-            and rl_cfg.noise_method in ("flow_sde", "flow_ode", "flow_cps")
+            and rl_cfg.noise_method in self._GRAPH_NOISE_METHODS
             and torch.cuda.is_available()
             and self.device.type == "cuda"
             and not torch.cuda.is_current_stream_capturing()
@@ -510,6 +517,43 @@ class Pi0RL(EnvIO, Pi0):
     def _param_signature(self) -> tuple:
         return tuple(p.data_ptr() for p in self.parameters())
 
+    def _capture_graph(self, fn):
+        """Capture ``fn()`` into a new graph of the shared pool; returns (graph, out).
+
+        On any failure the capture is ended, the caching allocator stops
+        routing allocations to the pool, the CUDA generator leaves capture
+        mode, the current stream is restored, and ``_GraphCaptureError`` is
+        raised: the process stays usable for the eager path.
+        """
+        device = self.device
+        pool = self._graph_pool
+        graph = torch.cuda.CUDAGraph()
+        torch.cuda.synchronize(device)
+        stream = torch.cuda.Stream(device=device)
+        error = None
+        out = None
+        with torch.cuda.stream(stream):
+            try:
+                graph.capture_begin(pool=pool)
+            except BaseException as e:  # noqa: BLE001
+                raise _GraphCaptureError(f"capture_begin failed: {e!r}") from e
+            try:
+                out = fn()
+            except BaseException as e:  # noqa: BLE001
+                error = e
+            ended = False
+            try:
+                graph.capture_end()
+                ended = True
+            except BaseException as e:  # noqa: BLE001
+                error = error if error is not None else e
+            if not ended:
+                _recover_failed_capture(device, pool)
+        if error is not None:
+            del graph, out
+            raise _GraphCaptureError(f"graph capture failed: {error!r}") from error
+        return graph, out
+
     def _build_graph_bank(self, flat, compute_values, hi, key, param_sig):
         device = self.device
         static = {
@@ -540,17 +584,30 @@ class Pi0RL(EnvIO, Pi0):
             # Two graphs per request: the prefix (shared by every chosen step),
             # then the denoising loop of the chosen step. Launching the second
             # while the first runs hides its launch cost.
-            prefix_graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(prefix_graph, pool=self._graph_pool):
-                pre = self._device_prefix(static_obs)
+            prefix_graph, pre = self._capture_graph(
+                lambda: self._device_prefix(static_obs)
+            )
             for chosen in range(hi + 1):
-                graph = torch.cuda.CUDAGraph()
-                with torch.cuda.graph(graph, pool=self._graph_pool):
-                    out = self._device_suffix(
+                graphs[chosen] = self._capture_graph(
+                    lambda chosen=chosen: self._device_suffix(
                         static_obs, pre, chosen, compute_values, timesteps_host
                     )
-                graphs[chosen] = (graph, out)
+                )
             torch.cuda.synchronize(device)
+        except Exception as e:  # noqa: BLE001
+            # Not graphable (or the warmup failed): drop everything captured
+            # for this signature, use a fresh pool for later banks, and let the
+            # caller run the eager path for this and later calls.
+            graphs.clear()
+            prefix_graph = pre = None
+            self._graph_pool = None
+            torch.cuda.synchronize(device)
+            logger.warning(
+                "openpi[rl]: CUDA-graph rollout disabled for this input "
+                "signature, using the eager path: %s",
+                e,
+            )
+            return None
         finally:
             torch.set_rng_state(cpu_state)
             torch.cuda.set_rng_state(cuda_state, device)
@@ -589,10 +646,20 @@ class Pi0RL(EnvIO, Pi0):
             return self._predict_train(
                 observation, noise=None, rng=None, compute_values=compute_values
             )
+        failed = self.__dict__.setdefault("_graph_failed_keys", set())
+        if key in failed:
+            return self._predict_train(
+                observation, noise=None, rng=None, compute_values=compute_values
+            )
         param_sig = self._param_signature()
         bank = self.__dict__.get("_graph_banks", {}).get(key)
         if bank is None or bank["param_sig"] != param_sig:
             bank = self._build_graph_bank(flat, compute_values, hi, key, param_sig)
+            if bank is None:
+                failed.add(key)
+                return self._predict_train(
+                    observation, noise=None, rng=None, compute_values=compute_values
+                )
 
         chosen = random.randint(0, hi)
         for k, v in flat.items():
@@ -851,6 +918,37 @@ class Pi0RL(EnvIO, Pi0):
                     self.value_head, suffix_act, action_chunk=self.action_chunk
                 )[:, None]
         return result
+
+
+class _GraphCaptureError(RuntimeError):
+    """A CUDA-graph capture failed; the process state was restored."""
+
+
+def _recover_failed_capture(device: torch.device, pool) -> None:
+    """Undo what a capture whose ``capture_end`` raised leaves behind.
+
+    ``CUDAGraph.capture_end`` stops at the failing ``cudaStreamEndCapture``:
+    the caching allocator would keep allocating into the graph pool and the
+    CUDA generators would stay in capture mode (every later random draw then
+    fails or uses the graph offsets). End the pool allocation and run one empty
+    capture (in its own pool) whose clean ``capture_end`` takes the generators
+    out of capture mode.
+    """
+    index = device.index if device.index is not None else torch.cuda.current_device()
+    try:
+        torch._C._cuda_endAllocateToPool(index, pool)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        torch.cuda.synchronize(device)
+    except Exception:  # noqa: BLE001
+        pass
+    reset = torch.cuda.CUDAGraph()
+    with torch.cuda.stream(torch.cuda.Stream(device=device)):
+        reset.capture_begin(pool=torch.cuda.graph_pool_handle())
+        reset.capture_end()
+    del reset
+    torch.cuda.synchronize(device)
 
 
 def _clone_replay_obs(repacked: dict[str, Any]) -> dict[str, Any]:
