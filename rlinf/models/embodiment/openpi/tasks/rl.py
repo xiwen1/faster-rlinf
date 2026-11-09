@@ -339,15 +339,18 @@ class Pi0RL(EnvIO, Pi0):
     # ``random.randint``. The graphs launch exactly the kernels of the eager
     # path on the same inputs, and draw the same noise from the global CUDA
     # generator in the same order (graph-safe philox offsets), so every output
-    # is bitwise the eager one. Only the default configuration takes it (no
-    # caller noise / generator, no joint logprob, no NFT, no learned noise,
-    # eval mode, no grad); everything else runs ``_predict_train``.
+    # is bitwise the eager one. With ``joint_logprob`` every step is noised,
+    # no step is drawn, and one loop graph serves every request. Only verified
+    # configurations take it (no caller noise / generator, no NFT, a noise
+    # method of ``_GRAPH_NOISE_METHODS``, eval mode, no grad); everything else
+    # runs ``_predict_train``.
     # ------------------------------------------------------------------
     _GRAPH_MAX_BANKS = 8
     # Noise methods verified capturable and bitwise equal to ``_predict_train``.
     # (flow_cps is not: its ``torch.as_tensor(noise_level, device=...)`` is a
     # host-to-device copy, which a CUDA graph cannot capture.)
-    _GRAPH_NOISE_METHODS = ("flow_sde", "flow_ode")
+    # flow_noise: the noise head is plain device ops on the suffix output.
+    _GRAPH_NOISE_METHODS = ("flow_sde", "flow_ode", "flow_noise")
 
     def _graph_fast_path_ok(self, noise, rng) -> bool:
         rl_cfg = self.rl_cfg
@@ -357,7 +360,6 @@ class Pi0RL(EnvIO, Pi0):
             and rng is None
             and not self.training
             and not torch.is_grad_enabled()
-            and not rl_cfg.joint_logprob
             and not rl_cfg.is_nft
             and rl_cfg.noise_method in self._GRAPH_NOISE_METHODS
             and torch.cuda.is_available()
@@ -442,29 +444,47 @@ class Pi0RL(EnvIO, Pi0):
         compute_values: bool,
         timesteps_host: list[float],
     ) -> dict[str, torch.Tensor]:
-        """Denoising loop of ``_predict_train`` for a known ``chosen`` step (capturable)."""
+        """Denoising loop of ``_predict_train`` (capturable).
+
+        ``chosen`` is the step drawn by ``random.randint``, or ``None`` with
+        ``joint_logprob`` (every step uses the noise method, no step is drawn).
+        """
         rl_cfg = self.rl_cfg
         device = self.device
         B = observation.state.shape[0]
         num_steps = self.num_steps
         noise, prefix_mask = pre["noise"], pre["prefix_mask"]
         kv_cache, vlm_value = pre["kv_cache"], pre["vlm_value"]
-        denoise_inds = torch.full(
-            (B, num_steps), chosen, device=device, dtype=torch.long
-        )
+        joint = chosen is None
+        if joint:
+            chosen_per_step = torch.arange(num_steps, device=device)
+            denoise_inds = chosen_per_step[None].expand(B, -1).contiguous()
+        else:
+            denoise_inds = torch.full(
+                (B, num_steps), chosen, device=device, dtype=torch.long
+            )
         idx_step = torch.empty(B, device=device, dtype=torch.long)
         chains = [noise]
         log_probs: list[torch.Tensor] = []
         suffix_values: list[torch.Tensor] = []
         x_t = noise
+        if joint:
+            log_probs.append(
+                rl_sampler.gaussian_logprob(
+                    x_t, torch.zeros_like(x_t), torch.ones_like(x_t)
+                )
+            )
         for idx in range(num_steps):
-            method = rl_cfg.noise_method if idx == chosen else "flow_ode"
+            method = rl_cfg.noise_method if (joint or idx == chosen) else "flow_ode"
             t_val = timesteps_host[idx]
             t_tensor = torch.full((B,), t_val, device=device, dtype=torch.float32)
             suffix_act = self.run_suffix(
                 observation, x_t, t_tensor, kv_cache, prefix_mask
             )
             v_t = self.velocity_from_suffix(suffix_act).to(torch.float32)
+            noise_std = None
+            if method == "flow_noise":
+                noise_std = self.noise_head(suffix_act).to(torch.float32)
             idx_step.fill_(idx)
             x_t_mean, x_t_std = rl_sampler.sample_mean_var(
                 x_t.to(torch.float32),
@@ -473,7 +493,7 @@ class Pi0RL(EnvIO, Pi0):
                 noise_method=method,
                 noise_level=rl_cfg.noise_level,
                 num_steps=num_steps,
-                noise_std=None,
+                noise_std=noise_std,
             )
             step_noise = torch.randn(x_t.shape, device=device, dtype=torch.float32)
             x_t = x_t_mean + step_noise * x_t_std
@@ -496,9 +516,12 @@ class Pi0RL(EnvIO, Pi0):
         log_probs_stacked = log_probs_stacked[
             :, :, : self.action_chunk, : self.action_env_dim
         ]
-        log_probs_picked = log_probs_stacked[
-            torch.arange(B, device=device), denoise_inds[:, 0]
-        ]
+        if joint:
+            log_probs_picked = log_probs_stacked.mean(dim=1)
+        else:
+            log_probs_picked = log_probs_stacked[
+                torch.arange(B, device=device), denoise_inds[:, 0]
+            ]
         log_probs_picked = log_probs_picked.float().contiguous()
         if vlm_value is not None:
             prev_values = vlm_value[:, None].float().contiguous()
@@ -554,8 +577,13 @@ class Pi0RL(EnvIO, Pi0):
             raise _GraphCaptureError(f"graph capture failed: {error!r}") from error
         return graph, out
 
+    def _graph_variants(self, hi: int) -> list:
+        """Loop graphs of a bank: one per drawable step, or one (``None``) when joint."""
+        return [None] if self.rl_cfg.joint_logprob else list(range(hi + 1))
+
     def _build_graph_bank(self, flat, compute_values, hi, key, param_sig):
         device = self.device
+        variants = self._graph_variants(hi)
         static = {
             k: (v.clone() if torch.is_tensor(v) else v) for k, v in flat.items()
         }
@@ -574,7 +602,7 @@ class Pi0RL(EnvIO, Pi0):
             side = torch.cuda.Stream(device=device)
             side.wait_stream(torch.cuda.current_stream(device))
             with torch.cuda.stream(side):
-                for chosen in range(hi + 1):
+                for chosen in variants:
                     pre = self._device_prefix(static_obs)
                     self._device_suffix(
                         static_obs, pre, chosen, compute_values, timesteps_host
@@ -587,7 +615,7 @@ class Pi0RL(EnvIO, Pi0):
             prefix_graph, pre = self._capture_graph(
                 lambda: self._device_prefix(static_obs)
             )
-            for chosen in range(hi + 1):
+            for chosen in variants:
                 graphs[chosen] = self._capture_graph(
                     lambda chosen=chosen: self._device_suffix(
                         static_obs, pre, chosen, compute_values, timesteps_host
@@ -661,7 +689,8 @@ class Pi0RL(EnvIO, Pi0):
                     observation, noise=None, rng=None, compute_values=compute_values
                 )
 
-        chosen = random.randint(0, hi)
+        # As in ``_predict_train``: a step is drawn only without joint logprobs.
+        chosen = None if rl_cfg.joint_logprob else random.randint(0, hi)
         for k, v in flat.items():
             if v is not None:
                 bank["static"][k].copy_(v)
