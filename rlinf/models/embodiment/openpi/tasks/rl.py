@@ -20,6 +20,7 @@ import os
 import random
 from typing import Any, Literal, Sequence
 
+import einops
 import numpy as np
 import torch
 
@@ -32,7 +33,7 @@ from rlinf.models.embodiment.openpi.modules.model import (
     Observation,
     preprocess_observation,
 )
-from rlinf.models.embodiment.openpi.pi0 import Pi0
+from rlinf.models.embodiment.openpi.pi0 import Pi0, make_attn_mask
 from rlinf.models.embodiment.openpi.pi0_config import Pi0Config
 from rlinf.models.embodiment.openpi.sampling import rl_sampler
 from rlinf.models.embodiment.openpi.transforms.env import repack_env_obs
@@ -41,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 # RLINF_OPENPI_CUDA_GRAPHS=0 turns the CUDA-graph rollout fast path off.
 _CUDA_GRAPHS = os.environ.get("RLINF_OPENPI_CUDA_GRAPHS", "1") != "0"
+# RLINF_OPENPI_SKIP_DEAD_SLOTS=0 keeps image slots that are masked out for every
+# sample (padding cameras) in the graph fast path's prefix.
+_SKIP_DEAD_SLOTS = os.environ.get("RLINF_OPENPI_SKIP_DEAD_SLOTS", "1") != "0"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,14 +174,15 @@ class Pi0RL(EnvIO, Pi0):
             env_obs,
             select_state=self._select_configured_state,
         )
-        observation = self._observation_dict_to_device(
-            self.input_transform(repacked, transpose=False)
-        )
+        processed = self.input_transform(repacked, transpose=False)
+        # Host-side masks: which camera slots are padding for the whole batch.
+        dead_slots = _dead_image_slots(processed)
+        observation = self._observation_dict_to_device(processed)
         if mode == "eval":
             return self._predict_eval(observation, noise=noise, rng=rng)
         if self._graph_fast_path_ok(noise, rng):
             actions, result = self._predict_train_graphed(
-                observation, compute_values=compute_values
+                observation, compute_values=compute_values, dead_slots=dead_slots
             )
         else:
             actions, result = self._predict_train(
@@ -412,7 +417,80 @@ class Pi0RL(EnvIO, Pi0):
             cache[key] = rl_sampler.get_timesteps(self.num_steps, device).tolist()
         return cache[key]
 
-    def _device_prefix(self, observation: Observation) -> dict[str, Any]:
+    def _usable_dead_slots(self, observation: Observation, dead_slots) -> tuple:
+        """The subset of ``dead_slots`` the prefix may skip (else ``()``)."""
+        if not (_SKIP_DEAD_SLOTS and dead_slots):
+            return ()
+        if self.pcd or observation.tokenized_prompt is None:
+            return ()
+        names = list(observation.images)
+        dead = tuple(n for n in dead_slots if n in observation.images)
+        if not dead or len(dead) == len(names):
+            return ()
+        shapes = {tuple(observation.images[n].shape) for n in names}
+        if len(shapes) != 1:  # a skipped slot's token count is taken from a kept one
+            return ()
+        return dead
+
+    def _prefix_cache_without(self, obs: Observation, dead: tuple):
+        """``build_prefix_cache`` without the image slots in ``dead``.
+
+        Every slot in ``dead`` is masked out for every sample: no valid token
+        attends to its tokens (their softmax weight is exactly 0, their values
+        enter only as 0 * v), and their own outputs are masked out of the
+        value head and of the suffix. Dropping them leaves every valid
+        token's computation as it was (the dropped key blocks are a multiple of
+        32 / 64 positions, so the softmax lanes and the attention-GEMM K blocks
+        of the kept keys do not move); the result is verified bitwise against
+        ``build_prefix_cache``.
+
+        Returns ``(prefix_out, full_mask, prefix_mask, kv_cache)``: ``prefix_out``
+        and ``full_mask`` in the full layout (zeros at the dropped slots) for the
+        value head, ``prefix_mask`` / ``kv_cache`` of the kept tokens for the
+        suffix.
+        """
+        image_names = [name for name in IMAGE_KEYS if name in obs.images]
+        image_names.extend(name for name in obs.images if name not in IMAGE_KEYS)
+        tokens, kept_mask, full_mask, segments = [], [], [], []
+        ntok = None
+        for name in image_names:
+            if name in dead:
+                segments.append((name, None))
+                continue
+            image_tokens, _ = self.img(obs.images[name])
+            ntok = image_tokens.shape[1]
+            segments.append((name, image_tokens))
+        for name, image_tokens in segments:
+            mask = einops.repeat(obs.image_masks[name], "b -> b s", s=ntok)
+            full_mask.append(mask)
+            if image_tokens is not None:
+                tokens.append(image_tokens)
+                kept_mask.append(mask)
+        lang = self.llm.embed(obs.tokenized_prompt)
+        tokens.append(lang)
+        kept_mask.append(obs.tokenized_prompt_mask)
+        full_mask.append(obs.tokenized_prompt_mask)
+        tokens = torch.cat(tokens, dim=1)
+        kept_mask = torch.cat(kept_mask, dim=1)
+        full_mask = torch.cat(full_mask, dim=1)
+        ar_mask = torch.zeros(tokens.shape[1], dtype=torch.bool, device=tokens.device)
+        attn_mask = make_attn_mask(kept_mask, ar_mask)
+        positions = torch.cumsum(kept_mask.int(), dim=1) - 1
+        outputs, kv_cache = self.llm(
+            [tokens, None], positions=positions, mask=attn_mask
+        )
+        out = outputs[0]
+        pieces, start = [], 0
+        for _, image_tokens in segments:
+            if image_tokens is None:
+                pieces.append(out.new_zeros(out.shape[0], ntok, out.shape[2]))
+            else:
+                pieces.append(out[:, start : start + ntok])
+                start += ntok
+        pieces.append(out[:, start:])
+        return torch.cat(pieces, dim=1), full_mask, kept_mask, kv_cache
+
+    def _device_prefix(self, observation: Observation, dead: tuple = ()) -> dict[str, Any]:
         """Device part of ``_predict_train`` before the denoising loop (capturable)."""
         rl_cfg = self.rl_cfg
         B = observation.state.shape[0]
@@ -423,11 +501,17 @@ class Pi0RL(EnvIO, Pi0):
             device=self.device,
             dtype=torch.float32,
         )
-        prefix_out, prefix_mask, kv_cache = self.build_prefix_cache(observation)
+        if dead:
+            prefix_out, value_mask, prefix_mask, kv_cache = self._prefix_cache_without(
+                observation, dead
+            )
+        else:
+            prefix_out, prefix_mask, kv_cache = self.build_prefix_cache(observation)
+            value_mask = prefix_mask
         vlm_value = None
         if rl_cfg.add_value_head and rl_cfg.value_after_vlm:
             vlm_value = rl_sampler.value_from_prefix(
-                self.value_head, prefix_out, prefix_mask, mode=rl_cfg.value_vlm_mode
+                self.value_head, prefix_out, value_mask, mode=rl_cfg.value_vlm_mode
             )
         return {
             "noise": noise,
@@ -581,7 +665,7 @@ class Pi0RL(EnvIO, Pi0):
         """Loop graphs of a bank: one per drawable step, or one (``None``) when joint."""
         return [None] if self.rl_cfg.joint_logprob else list(range(hi + 1))
 
-    def _build_graph_bank(self, flat, compute_values, hi, key, param_sig):
+    def _build_graph_bank(self, flat, compute_values, hi, key, param_sig, dead=()):
         device = self.device
         variants = self._graph_variants(hi)
         static = {
@@ -603,7 +687,7 @@ class Pi0RL(EnvIO, Pi0):
             side.wait_stream(torch.cuda.current_stream(device))
             with torch.cuda.stream(side):
                 for chosen in variants:
-                    pre = self._device_prefix(static_obs)
+                    pre = self._device_prefix(static_obs, dead)
                     self._device_suffix(
                         static_obs, pre, chosen, compute_values, timesteps_host
                     )
@@ -613,7 +697,7 @@ class Pi0RL(EnvIO, Pi0):
             # then the denoising loop of the chosen step. Launching the second
             # while the first runs hides its launch cost.
             prefix_graph, pre = self._capture_graph(
-                lambda: self._device_prefix(static_obs)
+                lambda: self._device_prefix(static_obs, dead)
             )
             for chosen in variants:
                 graphs[chosen] = self._capture_graph(
@@ -654,7 +738,7 @@ class Pi0RL(EnvIO, Pi0):
         return bank
 
     def _predict_train_graphed(
-        self, observation: Observation, *, compute_values: bool
+        self, observation: Observation, *, compute_values: bool, dead_slots=()
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         rl_cfg = self.rl_cfg
         observation = preprocess_observation(observation, train=False)
@@ -662,9 +746,11 @@ class Pi0RL(EnvIO, Pi0):
         num_steps = self.num_steps
         hi = max(num_steps - 2 if rl_cfg.ignore_last else num_steps - 1, 0)
         flat = self._flatten_observation(observation)
+        dead = self._usable_dead_slots(observation, dead_slots)
         key = (
             bool(compute_values),
             num_steps,
+            dead,
             tuple(
                 (k, tuple(v.shape), v.dtype, v.device) if torch.is_tensor(v) else (k, v)
                 for k, v in flat.items()
@@ -682,7 +768,9 @@ class Pi0RL(EnvIO, Pi0):
         param_sig = self._param_signature()
         bank = self.__dict__.get("_graph_banks", {}).get(key)
         if bank is None or bank["param_sig"] != param_sig:
-            bank = self._build_graph_bank(flat, compute_values, hi, key, param_sig)
+            bank = self._build_graph_bank(
+                flat, compute_values, hi, key, param_sig, dead
+            )
             if bank is None:
                 failed.add(key)
                 return self._predict_train(
@@ -978,6 +1066,23 @@ def _recover_failed_capture(device: torch.device, pool) -> None:
         reset.capture_end()
     del reset
     torch.cuda.synchronize(device)
+
+
+def _dead_image_slots(processed: dict[str, Any]) -> tuple:
+    """Camera slots whose host-side ``image_mask`` is False for every sample."""
+    masks = processed.get("image_mask") if isinstance(processed, dict) else None
+    if not isinstance(masks, dict):
+        return ()
+    dead = []
+    for name, mask in masks.items():
+        if torch.is_tensor(mask):
+            if mask.device.type != "cpu" or mask.numel() == 0:
+                continue
+            if not bool(mask.any()):
+                dead.append(name)
+        elif isinstance(mask, np.ndarray) and mask.size and not mask.any():
+            dead.append(name)
+    return tuple(sorted(dead))
 
 
 def _clone_replay_obs(repacked: dict[str, Any]) -> dict[str, Any]:
