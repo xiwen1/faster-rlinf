@@ -60,6 +60,17 @@ def select_openpi_norm_stats(
     return norm_stats
 
 
+def _skip_masked_resize(transform, transforms_module):
+    """``ResizeImages`` -> :class:`ResizeImagesUnmasked` (same sizes); others unchanged."""
+    if type(transform) is transforms_module.ResizeImages:
+        from rlinf.models.embodiment.openpi.transforms.resize import (
+            ResizeImagesUnmasked,
+        )
+
+        return ResizeImagesUnmasked(transform.height, transform.width)
+    return transform
+
+
 def build_openpi_transforms(
     model_path: str,
     config_name: str,
@@ -97,7 +108,10 @@ def build_openpi_transforms(
         transforms.InjectDefaultPrompt(None),
         *data_config.data_transforms.inputs,
         transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-        *data_config.model_transforms.inputs,
+        *(
+            _skip_masked_resize(t, transforms)
+            for t in data_config.model_transforms.inputs
+        ),
     ]
     output_transforms = [
         *data_config.model_transforms.outputs,
