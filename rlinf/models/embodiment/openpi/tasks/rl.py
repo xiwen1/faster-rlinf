@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 # RLINF_OPENPI_CUDA_GRAPHS=0 turns the CUDA-graph rollout fast path off.
 _CUDA_GRAPHS = os.environ.get("RLINF_OPENPI_CUDA_GRAPHS", "1") != "0"
-# RLINF_OPENPI_SKIP_DEAD_SLOTS=0 keeps image slots that are masked out for every
-# sample (padding cameras) in the graph fast path's prefix.
+# RLINF_OPENPI_SKIP_DEAD_SLOTS=0 runs SigLIP also on image slots that are masked
+# out for every sample (padding cameras) in the graph fast path's prefix.
 _SKIP_DEAD_SLOTS = os.environ.get("RLINF_OPENPI_SKIP_DEAD_SLOTS", "1") != "0"
 
 
@@ -428,67 +428,52 @@ class Pi0RL(EnvIO, Pi0):
         if not dead or len(dead) == len(names):
             return ()
         shapes = {tuple(observation.images[n].shape) for n in names}
-        if len(shapes) != 1:  # a skipped slot's token count is taken from a kept one
+        if len(shapes) != 1:  # a skipped slot's embedding shape is taken from a kept one
             return ()
         return dead
 
-    def _prefix_cache_without(self, obs: Observation, dead: tuple):
-        """``build_prefix_cache`` without the image slots in ``dead``.
+    def _prefix_cache_skip_dead(self, obs: Observation, dead: tuple):
+        """``build_prefix_cache`` without running SigLIP on the slots in ``dead``.
 
-        Every slot in ``dead`` is masked out for every sample: no valid token
-        attends to its tokens (their softmax weight is exactly 0, their values
-        enter only as 0 * v), and their own outputs are masked out of the
-        value head and of the suffix. Dropping them leaves every valid
-        token's computation as it was (the dropped key blocks are a multiple of
-        32 / 64 positions, so the softmax lanes and the attention-GEMM K blocks
-        of the kept keys do not move); the result is verified bitwise against
-        ``build_prefix_cache``.
-
-        Returns ``(prefix_out, full_mask, prefix_mask, kv_cache)``: ``prefix_out``
-        and ``full_mask`` in the full layout (zeros at the dropped slots) for the
-        value head, ``prefix_mask`` / ``kv_cache`` of the kept tokens for the
-        suffix.
+        Every slot in ``dead`` is masked out for every sample. The LLM prefix
+        keeps the reference layout and shapes (same tokens, positions, masks,
+        GEMM and attention shapes, the same calls of the compiled helpers);
+        only the dead slots' image embeddings are zeros instead of SigLIP of
+        the padding image. Those tokens reach a valid token only through an
+        attention weight that is exactly 0 (their logits are replaced by the
+        mask constant before the softmax) times a finite value, their own rows
+        are per-token, and their outputs are masked out of the value head and
+        of the suffix: every valid output is unchanged.
         """
         image_names = [name for name in IMAGE_KEYS if name in obs.images]
         image_names.extend(name for name in obs.images if name not in IMAGE_KEYS)
-        tokens, kept_mask, full_mask, segments = [], [], [], []
-        ntok = None
+        embedded = {}
         for name in image_names:
-            if name in dead:
-                segments.append((name, None))
-                continue
-            image_tokens, _ = self.img(obs.images[name])
-            ntok = image_tokens.shape[1]
-            segments.append((name, image_tokens))
-        for name, image_tokens in segments:
-            mask = einops.repeat(obs.image_masks[name], "b -> b s", s=ntok)
-            full_mask.append(mask)
-            if image_tokens is not None:
-                tokens.append(image_tokens)
-                kept_mask.append(mask)
-        lang = self.llm.embed(obs.tokenized_prompt)
-        tokens.append(lang)
-        kept_mask.append(obs.tokenized_prompt_mask)
-        full_mask.append(obs.tokenized_prompt_mask)
+            if name not in dead:
+                embedded[name], _ = self.img(obs.images[name])
+        like = next(iter(embedded.values()))
+        tokens, input_mask = [], []
+        for name in image_names:
+            image_tokens = embedded.get(name)
+            if image_tokens is None:
+                image_tokens = torch.zeros_like(like)
+            tokens.append(image_tokens)
+            input_mask.append(
+                einops.repeat(
+                    obs.image_masks[name], "b -> b s", s=image_tokens.shape[1]
+                )
+            )
+        tokens.append(self.llm.embed(obs.tokenized_prompt))
+        input_mask.append(obs.tokenized_prompt_mask)
         tokens = torch.cat(tokens, dim=1)
-        kept_mask = torch.cat(kept_mask, dim=1)
-        full_mask = torch.cat(full_mask, dim=1)
+        input_mask = torch.cat(input_mask, dim=1)
         ar_mask = torch.zeros(tokens.shape[1], dtype=torch.bool, device=tokens.device)
-        attn_mask = make_attn_mask(kept_mask, ar_mask)
-        positions = torch.cumsum(kept_mask.int(), dim=1) - 1
+        attn_mask = make_attn_mask(input_mask, ar_mask)
+        positions = torch.cumsum(input_mask.int(), dim=1) - 1
         outputs, kv_cache = self.llm(
             [tokens, None], positions=positions, mask=attn_mask
         )
-        out = outputs[0]
-        pieces, start = [], 0
-        for _, image_tokens in segments:
-            if image_tokens is None:
-                pieces.append(out.new_zeros(out.shape[0], ntok, out.shape[2]))
-            else:
-                pieces.append(out[:, start : start + ntok])
-                start += ntok
-        pieces.append(out[:, start:])
-        return torch.cat(pieces, dim=1), full_mask, kept_mask, kv_cache
+        return outputs[0], input_mask, kv_cache
 
     def _device_prefix(self, observation: Observation, dead: tuple = ()) -> dict[str, Any]:
         """Device part of ``_predict_train`` before the denoising loop (capturable)."""
@@ -502,16 +487,15 @@ class Pi0RL(EnvIO, Pi0):
             dtype=torch.float32,
         )
         if dead:
-            prefix_out, value_mask, prefix_mask, kv_cache = self._prefix_cache_without(
+            prefix_out, prefix_mask, kv_cache = self._prefix_cache_skip_dead(
                 observation, dead
             )
         else:
             prefix_out, prefix_mask, kv_cache = self.build_prefix_cache(observation)
-            value_mask = prefix_mask
         vlm_value = None
         if rl_cfg.add_value_head and rl_cfg.value_after_vlm:
             vlm_value = rl_sampler.value_from_prefix(
-                self.value_head, prefix_out, value_mask, mode=rl_cfg.value_vlm_mode
+                self.value_head, prefix_out, prefix_mask, mode=rl_cfg.value_vlm_mode
             )
         return {
             "noise": noise,
