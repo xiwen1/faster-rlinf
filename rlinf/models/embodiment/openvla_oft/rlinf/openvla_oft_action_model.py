@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Any, Optional
 
 import numpy as np
@@ -36,6 +37,11 @@ from rlinf.utils.utils import (
     compute_entropy_from_logits,
     compute_logprobs_from_logits,
 )
+
+from . import fast_llm
+
+# RLINF_OFT_FAST_LLM=0 disables the fused (bitwise-identical) language-model path of the rollout.
+_FAST_LLM = os.environ.get("RLINF_OFT_FAST_LLM", "1") != "0"
 
 
 class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy):
@@ -318,24 +324,34 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         multimodal_position_ids = mm_attention_mask.cumsum(dim=1) - 1
 
         # Forward pass through language model
-        outputs = self.language_model(
-            input_ids=None,
-            attention_mask=mm_attention_mask,
-            position_ids=multimodal_position_ids,
-            past_key_values=None,
-            inputs_embeds=mm_embeddings,
-            labels=None,
-            use_cache=None,
-            output_attentions=False,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-
-        # Extract hidden states for action tokens
-        last_hidden_states = outputs.hidden_states[-1]  # (B, seq_len, D)
+        if _FAST_LLM and fast_llm.supported(self.language_model, mm_embeddings):
+            # bitwise-identical fused path (same GEMM / SDPA calls, fused elementwise glue)
+            all_attended = bool(torch.all(mm_attention_mask == 1))
+            all_logits, last_hidden_states = fast_llm.lm_forward(
+                self.language_model,
+                mm_embeddings,
+                multimodal_position_ids,
+                None if all_attended else (mm_attention_mask != 0),
+            )
+        else:
+            outputs = self.language_model(
+                input_ids=None,
+                attention_mask=mm_attention_mask,
+                position_ids=multimodal_position_ids,
+                past_key_values=None,
+                inputs_embeds=mm_embeddings,
+                labels=None,
+                use_cache=None,
+                output_attentions=False,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            all_logits = outputs.logits
+            # Extract hidden states for action tokens
+            last_hidden_states = outputs.hidden_states[-1]  # (B, seq_len, D)
         assert last_hidden_states.shape[1] == mm_embeddings.shape[1]
 
-        logits_tensor = outputs.logits[
+        logits_tensor = all_logits[
             :,
             n_patches + n_prompt_tokens : n_patches
             + n_prompt_tokens
