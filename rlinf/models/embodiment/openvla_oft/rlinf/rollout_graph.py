@@ -45,6 +45,24 @@ from . import fast_llm
 
 logger = logging.getLogger(__name__)
 
+# Graph invalidation: a graph reads the parameters / buffers at the addresses seen at capture. Every
+# (re)registration of a parameter, buffer or submodule anywhere (attribute assignment, load_state_dict(assign=True),
+# module replacement) bumps this epoch; ``.data`` swaps and ``.to()`` change data_ptr. The signature is the
+# data_ptr tuple of the model's parameters and buffers, whose list is re-collected only when the epoch moved.
+_EPOCH = [0]
+
+
+def _bump_epoch(*_args):
+    _EPOCH[0] += 1
+
+
+for _register in (
+    torch.nn.modules.module.register_module_parameter_registration_hook,
+    torch.nn.modules.module.register_module_buffer_registration_hook,
+    torch.nn.modules.module.register_module_module_registration_hook,
+):
+    _register(_bump_epoch)
+
 
 class GraphCaptureError(RuntimeError):
     pass
@@ -141,10 +159,14 @@ class RolloutGraphs:
         self.banks = {}
         self.failed = set()
         self.pool = None
+        self._tensors = None
+        self._epoch = None
 
-    @staticmethod
-    def signature(model):
-        return tuple(p.data_ptr() for p in model.parameters()) + tuple(b.data_ptr() for b in model.buffers())
+    def signature(self, model):
+        if self._tensors is None or self._epoch != _EPOCH[0]:
+            self._tensors = list(model.parameters()) + list(model.buffers())
+            self._epoch = _EPOCH[0]
+        return tuple([t.data_ptr() for t in self._tensors])
 
     def _capture(self, device, fn):
         graph = torch.cuda.CUDAGraph()
