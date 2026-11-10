@@ -32,6 +32,7 @@ from torch.distributions import Normal
 from transformers.feature_extraction_utils import BatchFeature
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.gr00t.gr00t_n1d5.rollout_graph import RolloutGraphs
 from rlinf.models.embodiment.gr00t.simulation_io import (
     ACTION_CONVERSION_N1D5,
     OBS_CONVERSION,
@@ -616,7 +617,14 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             value=0,
         )
 
-        normalized_action, result = self._get_rl_action(normalized_input, mode=mode)
+        fast = None
+        graphs = self._rollout_graphs()
+        if graphs.supported(mode):
+            fast = graphs.run(normalized_input, mode)
+        if fast is not None:
+            normalized_action, result = fast
+        else:
+            normalized_action, result = self._get_rl_action(normalized_input, mode=mode)
         unnormalized_action = self._get_unnormalized_action(normalized_action)
 
         if not is_batch:
@@ -627,6 +635,14 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         )
 
         return torch.from_numpy(raw_action), result
+
+    def _rollout_graphs(self) -> RolloutGraphs:
+        """The CUDA-graph fast path of the rollout device step (rollout_graph.py)."""
+        graphs = self.__dict__.get("_rollout_graph_bank")
+        if graphs is None:
+            graphs = RolloutGraphs(self)
+            self.__dict__["_rollout_graph_bank"] = graphs
+        return graphs
 
     def apply_transforms(self, obs: dict[str, Any]) -> dict[str, Any]:
         """
