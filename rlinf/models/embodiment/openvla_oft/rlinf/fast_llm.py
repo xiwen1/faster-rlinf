@@ -219,18 +219,25 @@ def rsqrt_test(x):
 
 def supported(lm, inputs_embeds):
     """Whether the fused path reproduces this language model's forward exactly (else use the HF forward)."""
+    return (
+        inputs_embeds.is_cuda
+        and inputs_embeds.dtype == torch.bfloat16
+        and inputs_embeds.dim() == 3
+        and inputs_embeds.is_contiguous()
+        and inputs_embeds.shape[0] * inputs_embeds.shape[1] >= 16
+        and not torch.is_grad_enabled()
+        and config_supported(lm)
+    )
+
+
+def config_supported(lm):
+    """The model-configuration part of ``supported``."""
     cfg = lm.config
     m = lm.model
     try:
         attn0 = m.layers[0].self_attn
         ok = (
-            inputs_embeds.is_cuda
-            and inputs_embeds.dtype == torch.bfloat16
-            and inputs_embeds.dim() == 3
-            and inputs_embeds.is_contiguous()
-            and inputs_embeds.shape[0] * inputs_embeds.shape[1] >= 16
-            and not torch.is_grad_enabled()
-            and getattr(cfg, "_attn_implementation", None) == "sdpa"
+            getattr(cfg, "_attn_implementation", None) == "sdpa"
             and getattr(cfg, "pretraining_tp", 1) == 1
             and getattr(cfg, "rope_scaling", None) is None
             and cfg.hidden_size == _HIDDEN

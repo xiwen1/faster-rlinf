@@ -39,12 +39,14 @@ from rlinf.utils.utils import (
 )
 
 from . import fast_inputs as fast_inputs_mod
-from . import fast_llm
+from . import fast_llm, rollout_graph
 
 # RLINF_OFT_FAST_LLM=0 disables the fused (bitwise-identical) language-model path of the rollout.
 _FAST_LLM = os.environ.get("RLINF_OFT_FAST_LLM", "1") != "0"
 # RLINF_OFT_FAST_INPUTS=0 disables the table-based (bitwise-identical) image preprocessing of the rollout.
 _FAST_INPUTS = os.environ.get("RLINF_OFT_FAST_INPUTS", "1") != "0"
+# RLINF_OFT_CUDA_GRAPHS=0 disables the CUDA-graph replay of the rollout's device step.
+_CUDA_GRAPHS = os.environ.get("RLINF_OFT_CUDA_GRAPHS", "1") != "0"
 
 
 class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy):
@@ -223,6 +225,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         **kwargs,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         do_sample = kwargs.pop("do_sample")
+        host_text = None
 
         if env_obs is not None:
             task_descriptions = [
@@ -266,6 +269,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 pixel_values = fast_inputs.pixel_values(call_images, precision, device)
                 input_ids = ids_cpu.to(device=device, dtype=torch.long)
                 attention_mask = mask_cpu.to(device=device, dtype=torch.bool)
+                host_text = (ids_cpu, mask_cpu)
                 fast_inputs_done = True
             else:
                 fast_inputs_done = False
@@ -314,6 +318,12 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
         }
+
+        graph_out = self._graph_device_step(
+            input_ids, attention_mask, pixel_values, do_sample, kwargs, calculate_values, host_text
+        )
+        if graph_out is not None:
+            return self._finish_rollout(graph_out, forward_inputs)
 
         # assert first token is 1
         assert torch.all(input_ids[:, 0] == 1)
@@ -468,6 +478,77 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             "forward_inputs": forward_inputs,
         }
 
+        return chunk_actions, result
+
+    def _graph_device_step(
+        self, input_ids, attention_mask, pixel_values, do_sample, kwargs, calculate_values, host_text
+    ):
+        """The device part of the rollout by CUDA-graph replay (rollout_graph), or None for the eager path."""
+        if not (_CUDA_GRAPHS and _FAST_LLM) or torch.is_grad_enabled():
+            return None
+        if not all(torch.is_tensor(t) and t.is_cuda for t in (input_ids, attention_mask, pixel_values)):
+            return None
+        if input_ids.dim() != 2 or attention_mask.shape != input_ids.shape or pixel_values.dim() != 4:
+            return None
+        if pixel_values.dtype != torch.bfloat16 or not fast_llm.config_supported(self.language_model):
+            return None
+        if do_sample:
+            temperature, top_k = kwargs.get("temperature"), kwargs.get("top_k")
+            if not isinstance(temperature, (int, float)) or not isinstance(top_k, int):
+                return None
+            sampling = (True, float(temperature), int(top_k))
+        else:
+            sampling = (False, None, None)
+        # the reference's input asserts, on the host copies when the inputs were made here
+        ids_chk, mask_chk = host_text if host_text is not None else (input_ids, attention_mask)
+        assert torch.all(ids_chk[:, 0] == 1)
+        assert torch.all(mask_chk[:, 0] == 1)
+        # last token is space ` `
+        assert torch.all(ids_chk[:, -1] == 29871)
+        assert torch.all(mask_chk[:, -1] == 1)
+        # the reference passes no mask to SDPA when nothing is padded (_ignore_causal_mask_sdpa)
+        all_attended = bool(torch.all(mask_chk == 1))
+        graphs = self.__dict__.get("_rollout_graphs")
+        if graphs is None:
+            graphs = rollout_graph.RolloutGraphs()
+            self.__dict__["_rollout_graphs"] = graphs
+        return graphs.run(
+            self,
+            input_ids,
+            attention_mask,
+            pixel_values,
+            sampling,
+            bool(calculate_values) and hasattr(self, "value_head"),
+            all_attended,
+        )
+
+    def _finish_rollout(self, graph_out, forward_inputs):
+        """Host part of predict_action_batch after the device step (same numpy decoding as the eager path)."""
+        idxs, chunk_logprobs, chunk_values = graph_out
+        predicted_action_token_ids = idxs.reshape(-1, self.action_dim).cpu().numpy()
+        assert (predicted_action_token_ids >= self.vocab_size - self.config.n_action_bins).all() and (
+            predicted_action_token_ids < self.vocab_size
+        ).all()
+        discretized_actions = self.vocab_size - predicted_action_token_ids
+        discretized_actions = np.clip(
+            discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1
+        )
+        # == np.asarray([self.bin_centers[da] for da in discretized_actions])
+        normalized_actions = self.bin_centers[discretized_actions]
+        normalized_actions = normalized_actions.reshape(-1, self.action_dim)
+        actions = self._unnormalize_actions(normalized_actions, self.unnorm_key)
+        actions = actions.reshape(idxs.shape)
+        chunk_actions = torch.as_tensor(
+            actions.reshape(-1, self.num_action_chunks, self.action_dim)
+        )
+        forward_inputs["action_tokens"] = idxs.reshape(
+            -1, self.num_action_chunks, self.action_dim
+        )
+        result = {
+            "prev_logprobs": chunk_logprobs,
+            "prev_values": chunk_values,
+            "forward_inputs": forward_inputs,
+        }
         return chunk_actions, result
 
     def _get_fast_inputs(self):
