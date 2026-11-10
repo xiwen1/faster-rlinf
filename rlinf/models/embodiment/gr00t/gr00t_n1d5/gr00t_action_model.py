@@ -28,10 +28,15 @@ from gr00t.model.action_head.flow_matching_action_head import (
     FlowmatchingActionHeadConfig,
 )
 from gr00t.model.gr00t_n1 import GR00T_N1_5, GR00T_N1_5_Config
+from gr00t.model.transforms import GR00TTransform
 from torch.distributions import Normal
 from transformers.feature_extraction_utils import BatchFeature
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.gr00t.gr00t_n1d5.fast_transform import (
+    FAST_HOST_TRANSFORM,
+    fast_groot_apply,
+)
 from rlinf.models.embodiment.gr00t.gr00t_n1d5.rollout_graph import RolloutGraphs
 from rlinf.models.embodiment.gr00t.simulation_io import (
     ACTION_CONVERSION_N1D5,
@@ -595,7 +600,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             if not isinstance(v, np.ndarray):
                 obs_copy[k] = np.array(v)
 
-        normalized_input = self.apply_transforms(obs_copy)
+        normalized_input = self._apply_transforms_rollout(obs_copy)
 
         for key in normalized_input:
             if normalized_input[key].dtype == torch.float32:
@@ -643,6 +648,38 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             graphs = RolloutGraphs(self)
             self.__dict__["_rollout_graph_bank"] = graphs
         return graphs
+
+    def _apply_transforms_rollout(self, obs: dict[str, Any]) -> dict[str, Any]:
+        """``apply_transforms`` of the rollout: the same transforms, with the final
+        GR00TTransform run batched (fast_transform.py) when the input allows it."""
+        composed = self._modality_transform
+        transforms = getattr(composed, "transforms", None)
+        if (
+            not FAST_HOST_TRANSFORM
+            or type(composed) is not ComposedModalityTransform
+            or not transforms
+            or type(transforms[-1]) is not GR00TTransform
+        ):
+            return self.apply_transforms(obs)
+        data = obs
+        for i, transform in enumerate(transforms[:-1]):
+            try:
+                data = transform(data)
+            except Exception as e:
+                raise ValueError(f"Error applying transform {i} to data: {e}") from e
+        last = transforms[-1]
+        try:
+            out = fast_groot_apply(last, data)
+        except Exception:  # noqa: BLE001
+            out = None
+        if out is None:
+            try:
+                out = last(data)
+            except Exception as e:
+                raise ValueError(
+                    f"Error applying transform {len(transforms) - 1} to data: {e}"
+                ) from e
+        return out
 
     def apply_transforms(self, obs: dict[str, Any]) -> dict[str, Any]:
         """
