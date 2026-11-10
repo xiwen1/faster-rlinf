@@ -38,10 +38,13 @@ from rlinf.utils.utils import (
     compute_logprobs_from_logits,
 )
 
+from . import fast_inputs as fast_inputs_mod
 from . import fast_llm
 
 # RLINF_OFT_FAST_LLM=0 disables the fused (bitwise-identical) language-model path of the rollout.
 _FAST_LLM = os.environ.get("RLINF_OFT_FAST_LLM", "1") != "0"
+# RLINF_OFT_FAST_INPUTS=0 disables the table-based (bitwise-identical) image preprocessing of the rollout.
+_FAST_INPUTS = os.environ.get("RLINF_OFT_FAST_INPUTS", "1") != "0"
 
 
 class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy):
@@ -249,6 +252,24 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             precision = next(self.parameters()).dtype
 
             primary_image = all_images.pop(0)
+            fast_inputs = self._get_fast_inputs()
+            call_images = [primary_image] + [w.unsqueeze(1) for w in all_images]
+            if (
+                fast_inputs is not None
+                and fast_inputs.eligible(call_images)
+                and len(task_descriptions) == primary_image.shape[0]
+            ):
+                # bitwise-identical: one resize per image, normalization by a table gathered on the GPU
+                ids_cpu, mask_cpu = fast_inputs.text(
+                    task_descriptions, padding="max_length", max_length=max_length
+                )
+                pixel_values = fast_inputs.pixel_values(call_images, precision, device)
+                input_ids = ids_cpu.to(device=device, dtype=torch.long)
+                attention_mask = mask_cpu.to(device=device, dtype=torch.bool)
+                fast_inputs_done = True
+            else:
+                fast_inputs_done = False
+        if env_obs is not None and not fast_inputs_done:
             images = {"images": primary_image}
             inputs = self.input_processor(
                 text=task_descriptions,
@@ -448,6 +469,15 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         }
 
         return chunk_actions, result
+
+    def _get_fast_inputs(self):
+        if not _FAST_INPUTS:
+            return None
+        fi = self.__dict__.get("_fast_inputs_obj")
+        if fi is None or fi.processor is not self.input_processor:
+            fi = fast_inputs_mod.FastInputs(self.input_processor)
+            self.__dict__["_fast_inputs_obj"] = fi
+        return fi
 
     def preprocess_for_train(self, data):
         # action-token: [bsz, chunk-step, action-dim] -> [bsz, chunk-step x action-dim]
