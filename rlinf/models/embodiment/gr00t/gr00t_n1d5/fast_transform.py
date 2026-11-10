@@ -99,8 +99,14 @@ def _processor_kwargs_class(proc):
     return getattr(module, "Eagle2_5_VLProcessorKwargs", None)
 
 
-def fast_groot_apply(t, data: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """``GR00TTransform.apply`` for a batched eval-mode rollout input, or None."""
+def fast_groot_apply(
+    t, data: dict[str, Any], on_pixels=None, pixel_dtype=None
+) -> Optional[dict[str, Any]]:
+    """``GR00TTransform.apply`` for a batched eval-mode rollout input, or None.
+
+    ``pixel_dtype``: the dtype the caller converts float32 pixel values to (done
+    here, before the text work); ``on_pixels(pixel_values)`` is called as soon as
+    they are ready (the caller starts the vision tower while the text is built)."""
     if t.training:
         return None
     video = data.get("video")
@@ -135,8 +141,21 @@ def fast_groot_apply(t, data: dict[str, Any]) -> Optional[dict[str, Any]]:
     if kwargs_cls is None:
         return None
 
-    # 1) language and chat template (GR00TTransform._prepare_language / _apply_vlm_processing)
     n_img = T * V
+    # pixel values: per sample the images in (t v) order, CHW (the processor's
+    # rescale_and_normalize is elementwise: on the stacked batch it gives every
+    # image the values it gives that image alone)
+    chw = torch.from_numpy(video).permute(0, 1, 2, 5, 3, 4).reshape(B * n_img, C, H, W)
+    pixel_values = ip.rescale_and_normalize(chw, *norm_args)
+    if pixel_values.dtype != torch.float32 or not pixel_values.is_contiguous():
+        return None
+    if pixel_dtype is not None:
+        pixel_values = pixel_values.to(pixel_dtype)
+    image_sizes = torch.tensor([[H, W]] * (B * n_img))
+    if on_pixels is not None:
+        on_pixels(pixel_values)
+
+    # 1) language and chat template (GR00TTransform._prepare_language / _apply_vlm_processing)
     texts = []
     for i in range(B):
         if t._language_key is not None:
@@ -178,14 +197,6 @@ def fast_groot_apply(t, data: dict[str, Any]) -> Optional[dict[str, Any]]:
         new_texts.append(pattern.sub(repl, text))
     text_inputs = proc.tokenizer(new_texts, **output_kwargs["text_kwargs"])
 
-    # pixel values: per sample the images in (t v) order, CHW, through the table
-    # (the processor's rescale_and_normalize is elementwise: on the stacked batch it
-    # gives every image the values it gives that image alone)
-    chw = torch.from_numpy(video).permute(0, 1, 2, 5, 3, 4).reshape(B * n_img, C, H, W)
-    pixel_values = ip.rescale_and_normalize(chw, *norm_args)
-    if pixel_values.dtype != torch.float32 or not pixel_values.is_contiguous():
-        return None
-    image_sizes = torch.tensor([[H, W]] * (B * n_img))
 
     # 3) state (GR00TTransform._prepare_state + collate)
     D = state.shape[-1]

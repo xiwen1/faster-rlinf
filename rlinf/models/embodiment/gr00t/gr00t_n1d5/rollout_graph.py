@@ -101,6 +101,9 @@ class RolloutGraphs:
         self.model = model
         self.banks: dict = {}
         self.failed: set = set()
+        self.vision_banks: dict = {}
+        self.vision_failed: set = set()
+        self.ticket = None
         self.pool = None
 
     # ------------------------------------------------------------------
@@ -322,7 +325,7 @@ class RolloutGraphs:
         # Eagle2_5_VLForConditionalGeneration.forward
         input_ids = st["ids"]
         input_embeds = eagle.language_model.get_input_embeddings()(input_ids)
-        vit_embeds = eagle.extract_feature(st["pix"])
+        vit_embeds = st["vit"]  # the vision graph's output (extract_feature)
         B, N, C = input_embeds.shape
         input_embeds = input_embeds.reshape(B * N, C)
         img_idx = st["img_idx"]
@@ -472,23 +475,20 @@ class RolloutGraphs:
             raise _GraphCaptureError(f"graph capture failed: {error!r}") from error
         return graph, out
 
-    def _static_buffers(self, h):
+    _INPUTS = ("ids", "state", "emb", "img_idx", "cu", "pad_rows")
+
+    def _static_buffers(self, h, vision):
         m = self.model
         head = m.action_head
         device = m.device
         B = h["B"]
         steps = head.num_inference_timesteps
-        st = {
-            "ids": h["ids"].to(device),
-            "pix": h["pix"].to(device),
-            "state": h["state"].to(device),
-            "emb": h["emb"].to(device),
-            "img_idx": h["img_idx"].to(device),
-            "has_pad": h["has_pad"],
-        }
-        if h["has_pad"]:
-            st["cu"] = h["cu"].to(device)
-            st["pad_rows"] = h["pad_rows"].to(device)
+        st = {"has_pad": h["has_pad"], "vit": vision["out"]}
+        host = {}
+        for k in self._INPUTS:
+            if h.get(k) is not None:
+                st[k] = h[k].to(device)
+                host[k] = torch.empty(h[k].shape, dtype=h[k].dtype, pin_memory=True)
         # per-step constants, as sample_mean_var_val computes them from the int step
         step_idx, step_buckets = [], []
         for idx in range(steps):
@@ -506,17 +506,92 @@ class RolloutGraphs:
                 dtype=torch.long,
                 device=device,
             )
-        return st
+        return st, host
 
-    def _build(self, h, variants, key, param_sig):
+    def _saved_rng(self):
         device = self.model.device
-        st = self._static_buffers(h)
+        return (
+            torch.get_rng_state(),
+            torch.cuda.get_rng_state(device),
+            random.getstate(),
+            np.random.get_state(),
+        )
+
+    def _restore_rng(self, states):
+        cpu_state, cuda_state, py_state, np_state = states
+        torch.set_rng_state(cpu_state)
+        torch.cuda.set_rng_state(cuda_state, self.model.device)
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+
+    def _build_vision(self, pix, vkey, param_sig):
+        """Graph of the vision tower (SigLIP + mlp1) for pixel values of this shape."""
+        device = self.model.device
+        eagle = self.model.backbone.eagle_model
         if self.pool is None:
             self.pool = torch.cuda.graph_pool_handle()
-        cpu_state = torch.get_rng_state()
-        cuda_state = torch.cuda.get_rng_state(device)
-        py_state = random.getstate()
-        np_state = np.random.get_state()
+        static = pix.to(device)
+        host = torch.empty(pix.shape, dtype=pix.dtype, pin_memory=True)
+        rng = self._saved_rng()
+        try:
+            side = torch.cuda.Stream(device=device)
+            side.wait_stream(torch.cuda.current_stream(device))
+            with torch.cuda.stream(side):
+                eagle.extract_feature(static)
+            torch.cuda.current_stream(device).wait_stream(side)
+            graph, out = self._capture(lambda: eagle.extract_feature(static))
+            torch.cuda.synchronize(device)
+        except Exception as e:  # noqa: BLE001
+            self.pool = None
+            torch.cuda.synchronize(device)
+            logger.warning("gr00t[rl]: vision CUDA graph disabled, using the eager path: %s", e)
+            return None
+        finally:
+            self._restore_rng(rng)
+        while len(self.vision_banks) >= self.MAX_BANKS:
+            self.vision_banks.pop(next(iter(self.vision_banks)))
+        vb = {"static": static, "host": host, "graph": graph, "out": out, "param_sig": param_sig}
+        self.vision_banks[vkey] = vb
+        return vb
+
+    def _vision_bank(self, pix, param_sig):
+        vkey = (tuple(pix.shape), pix.dtype)
+        if vkey in self.vision_failed:
+            return None
+        vb = self.vision_banks.get(vkey)
+        if vb is None or vb["param_sig"] != param_sig:
+            vb = self._build_vision(pix, vkey, param_sig)
+            if vb is None:
+                self.vision_failed.add(vkey)
+        return vb
+
+    def launch_vision(self, pix) -> None:
+        """Start the vision tower on the request's pixel values (called by the host
+        transform as soon as they exist; the text is built while it runs)."""
+        self.ticket = None
+        try:
+            if not torch.is_tensor(pix) or pix.device.type != "cpu":
+                return
+            if pix.dtype != self.model.action_head.dtype or not pix.is_contiguous():
+                return
+            param_sig = self._param_signature()
+            vb = self._vision_bank(pix, param_sig)
+            if vb is None:
+                return
+            vb["host"].copy_(pix)
+            vb["static"].copy_(vb["host"], non_blocking=True)
+            vb["graph"].replay()
+            self.ticket = (pix, vb, param_sig)
+        except Exception as e:  # noqa: BLE001
+            self.ticket = None
+            logger.warning("gr00t[rl]: vision launch failed: %s", e)
+
+    def _build(self, h, variants, key, param_sig, vision):
+        device = self.model.device
+        st, host = self._static_buffers(h, vision)
+        if self.pool is None:
+            self.pool = torch.cuda.graph_pool_handle()
+        rng = self._saved_rng()
         loops = {}
         try:
             side = torch.cuda.Stream(device=device)
@@ -544,13 +619,17 @@ class RolloutGraphs:
             )
             return None
         finally:
-            torch.set_rng_state(cpu_state)
-            torch.cuda.set_rng_state(cuda_state, device)
-            random.setstate(py_state)
-            np.random.set_state(np_state)
+            self._restore_rng(rng)
         while len(self.banks) >= self.MAX_BANKS:
             self.banks.pop(next(iter(self.banks)))
-        bank = {"static": st, "prefix": (prefix_graph, pre), "loops": loops, "param_sig": param_sig}
+        bank = {
+            "static": st,
+            "host": host,
+            "prefix": (prefix_graph, pre),
+            "loops": loops,
+            "param_sig": param_sig,
+            "vision": vision,
+        }
         self.banks[key] = bank
         return bank
 
@@ -563,6 +642,7 @@ class RolloutGraphs:
     def run(self, normalized_input: dict[str, Any], mode):
         """Returns (actions [float32, device], result) as ``_get_rl_action``,
         or None when this request must take the eager path (no RNG consumed)."""
+        ticket, self.ticket = self.ticket, None
         m = self.model
         head = m.action_head
         cfg = head.rl_config
@@ -580,10 +660,22 @@ class RolloutGraphs:
         key = self._key(h, variants)
         if key in self.failed:
             return None
-        param_sig = self._param_signature()
+        pix = h["pix"]
+        if ticket is not None and ticket[0] is pix:
+            # vision tower already started on these pixel values
+            param_sig = ticket[2]
+            vision = ticket[1]
+        else:
+            param_sig = self._param_signature()
+            vision = self._vision_bank(pix, param_sig)
+            if vision is None:
+                return None
+            vision["host"].copy_(pix)
+            vision["static"].copy_(vision["host"], non_blocking=True)
+            vision["graph"].replay()
         bank = self.banks.get(key)
-        if bank is None or bank["param_sig"] != param_sig:
-            bank = self._build(h, variants, key, param_sig)
+        if bank is None or bank["param_sig"] != param_sig or bank["vision"] is not vision:
+            bank = self._build(h, variants, key, param_sig, vision)
             if bank is None:
                 self.failed.add(key)
                 return None
@@ -599,14 +691,10 @@ class RolloutGraphs:
         denoise_inds = denoise_inds[None].repeat(B, 1)
 
         st = bank["static"]
-        st["ids"].copy_(h["ids"])
-        st["pix"].copy_(h["pix"])
-        st["state"].copy_(h["state"])
-        st["emb"].copy_(h["emb"])
-        st["img_idx"].copy_(h["img_idx"])
-        if h["has_pad"]:
-            st["cu"].copy_(h["cu"])
-            st["pad_rows"].copy_(h["pad_rows"])
+        host = bank["host"]
+        for k, buf in host.items():
+            buf.copy_(h[k])
+            st[k].copy_(buf, non_blocking=True)
         bank["prefix"][0].replay()
         graph, out = bank["loops"][chosen]
         graph.replay()

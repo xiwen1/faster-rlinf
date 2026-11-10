@@ -600,7 +600,11 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             if not isinstance(v, np.ndarray):
                 obs_copy[k] = np.array(v)
 
-        normalized_input = self._apply_transforms_rollout(obs_copy)
+        graphs = self._rollout_graphs()
+        use_graphs = graphs.supported(mode)
+        normalized_input = self._apply_transforms_rollout(
+            obs_copy, on_pixels=graphs.launch_vision if use_graphs else None
+        )
 
         for key in normalized_input:
             if normalized_input[key].dtype == torch.float32:
@@ -622,10 +626,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             value=0,
         )
 
-        fast = None
-        graphs = self._rollout_graphs()
-        if graphs.supported(mode):
-            fast = graphs.run(normalized_input, mode)
+        fast = graphs.run(normalized_input, mode) if use_graphs else None
         if fast is not None:
             normalized_action, result = fast
         else:
@@ -649,9 +650,12 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             self.__dict__["_rollout_graph_bank"] = graphs
         return graphs
 
-    def _apply_transforms_rollout(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def _apply_transforms_rollout(self, obs: dict[str, Any], on_pixels=None) -> dict[str, Any]:
         """``apply_transforms`` of the rollout: the same transforms, with the final
-        GR00TTransform run batched (fast_transform.py) when the input allows it."""
+        GR00TTransform run batched (fast_transform.py) when the input allows it.
+        Its float32 pixel values come out already in bfloat16, as
+        ``predict_action_batch`` converts them, and are handed to ``on_pixels``
+        before the text is processed."""
         composed = self._modality_transform
         transforms = getattr(composed, "transforms", None)
         if (
@@ -669,7 +673,9 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
                 raise ValueError(f"Error applying transform {i} to data: {e}") from e
         last = transforms[-1]
         try:
-            out = fast_groot_apply(last, data)
+            out = fast_groot_apply(
+                last, data, on_pixels=on_pixels, pixel_dtype=torch.bfloat16
+            )
         except Exception:  # noqa: BLE001
             out = None
         if out is None:
