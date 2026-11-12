@@ -179,6 +179,17 @@ class LiberoEnv(gym.Env):
         self.skip_intermediate_renders = bool(
             OmegaConf.select(cfg, "skip_intermediate_renders", default=False)
         )
+        # faster-rlinf: bitwise-identical fast vector-env paths (whole chunk per worker round
+        # trip, parallel one-shot reset, extraction in the worker). Only for the stock
+        # subprocess env and the stock observation extraction; `fast_vector_env: False`
+        # restores the upstream per-step protocol.
+        self.fast_vector_env = (
+            bool(OmegaConf.select(cfg, "fast_vector_env", default=True))
+            and type(self.env) is ReconfigureSubprocEnv
+            and type(self)._extract_image_and_state
+            is LiberoEnv._extract_image_and_state
+            and not self.env.is_async
+        )
 
     def _log_evaluation_mode(self):
         """Log the LIBERO evaluation mode banner (rank 0 env worker only)."""
@@ -751,6 +762,9 @@ class LiberoEnv(gym.Env):
         return infos
 
     def _extract_image_and_state(self, obs):
+        if "full_image" in obs and "agentview_image" not in obs:
+            # Already extracted in the env worker (faster-rlinf fast paths).
+            return obs
         return {
             "full_image": get_libero_image(obs),
             "wrist_image": get_libero_wrist_image(obs),
@@ -816,6 +830,59 @@ class LiberoEnv(gym.Env):
             init_state = self._get_reset_states(env_idx=env_idx)
             self.env.set_init_state(init_state=init_state, id=env_idx)
 
+    def _fast_reset(self, reset_state_ids, env_idx, num_steps_wait):
+        """faster-rlinf: ``_reconfigure`` + the settle loop as one parallel worker command.
+
+        Main-process bookkeeping (task/trial ids, env_fn params, seeds, init states, settle
+        actions) is computed exactly as in ``_reconfigure`` and the upstream settle loop; each
+        worker then runs the same env calls in the same order. Only the last settle step is
+        rendered: its observation is the only one kept (``current_raw_obs``).
+        """
+        env_idx = np.asarray(env_idx).reshape(-1)
+        reconfig_env_idx = []
+        task_ids, trial_ids = self._get_task_and_trial_ids_from_reset_state_ids(
+            reset_state_ids
+        )
+        for j, env_id in enumerate(env_idx):
+            task_changed = self.task_ids[env_id] != task_ids[j]
+            self.task_ids[env_id] = task_ids[j]
+            self.trial_ids[env_id] = trial_ids[j]
+            if task_changed or not self.is_eval:
+                reconfig_env_idx.append(env_id)
+        reconfigure_params = {}
+        if reconfig_env_idx:
+            env_fn_params = self.get_env_fn_params(reconfig_env_idx)
+            reconfigure_params = {
+                int(i): p for i, p in zip(reconfig_env_idx, env_fn_params)
+            }
+        seed_base = self.seed * len(env_idx)
+        seeds = [seed_base + i for i in range(self.env.env_num)]
+        variant = os.environ.get(
+            "LIBERO_TYPE",
+            self.cfg.get("libero_variant", "standard")
+            if hasattr(self.cfg, "get")
+            else "standard",
+        )
+        init_states = (
+            self._get_reset_states(env_idx=env_idx) if variant != "plus" else None
+        )
+        wait_actions = []
+        for _ in range(num_steps_wait):
+            zero_actions = np.zeros((len(env_idx), 7))
+            if self.cfg.reset_gripper_open:
+                zero_actions[:, -1] = -1
+            wait_actions.append(zero_actions)
+        wait_actions = np.stack(wait_actions, axis=1)  # [n_env, n_wait, 7]
+        last = self.env.reset_episodes_fast(
+            env_idx,
+            reconfigure_params,
+            seeds,
+            init_states,
+            wait_actions,
+            render_all=False,
+        )
+        return [r[0] for r in last]
+
     def reset(
         self,
         env_idx: Optional[Union[int, list[int], np.ndarray]] = None,
@@ -841,17 +908,20 @@ class LiberoEnv(gym.Env):
             num_reset_states = len(env_idx)
             reset_state_ids = self._get_random_reset_state_ids(num_reset_states)
 
-        self._reconfigure(reset_state_ids, env_idx)
         # Preserve LIBERO's existing 15-step settling behavior unless a model
         # explicitly requests a different reset wait (FastWAM uses 30).
         num_steps_wait = int(self.cfg.get("num_steps_wait", 15))
-        for _ in range(num_steps_wait):
-            zero_actions = np.zeros((len(env_idx), 7))
-            if self.cfg.reset_gripper_open:
-                zero_actions[:, -1] = -1
-            raw_obs, _reward, terminations, info_lists = self.env.step(
-                zero_actions, env_idx
-            )
+        if self.fast_vector_env and num_steps_wait > 0:
+            raw_obs = self._fast_reset(reset_state_ids, env_idx, num_steps_wait)
+        else:
+            self._reconfigure(reset_state_ids, env_idx)
+            for _ in range(num_steps_wait):
+                zero_actions = np.zeros((len(env_idx), 7))
+                if self.cfg.reset_gripper_open:
+                    zero_actions[:, -1] = -1
+                raw_obs, _reward, terminations, info_lists = self.env.step(
+                    zero_actions, env_idx
+                )
         if self.current_raw_obs is None:
             self.current_raw_obs = [None] * self.num_envs
         for i, idx in enumerate(env_idx):
@@ -900,9 +970,15 @@ class LiberoEnv(gym.Env):
         if isinstance(actions, torch.Tensor):
             actions = actions.detach().cpu().numpy()
 
+        raw_step = self.env.step(actions)
+        return self._after_env_step(raw_step, auto_reset, _skip_obs_wrap)
+
+    def _after_env_step(self, raw_step, auto_reset, _skip_obs_wrap):
+        """Main-process bookkeeping of one control step (split out of ``step``)."""
         self._elapsed_steps += 1
-        raw_obs, _reward, terminations, info_lists = self.env.step(actions)
-        self.current_raw_obs = raw_obs
+        raw_obs, _reward, terminations, info_lists = raw_step
+        if raw_obs is not None:
+            self.current_raw_obs = raw_obs
         infos = list_of_dict_to_dict_of_list(info_lists)
         truncations = self.elapsed_steps >= self.cfg.max_episode_steps
         obs = None if _skip_obs_wrap else self._wrap_obs(raw_obs)
@@ -937,6 +1013,30 @@ class LiberoEnv(gym.Env):
         raw_chunk_terminations = []
         raw_chunk_truncations = []
         rendering_disabled = False
+        if self.fast_vector_env:
+            # faster-rlinf: every worker runs its whole chunk in one round trip; the
+            # per-step bookkeeping below is the same code ``step`` runs.
+            if isinstance(chunk_actions, torch.Tensor):
+                np_actions = chunk_actions.detach().cpu().numpy()
+            else:
+                np_actions = np.asarray(chunk_actions)
+            render_mask = [
+                (not self.skip_intermediate_renders) or (i == chunk_size - 1)
+                for i in range(chunk_size)
+            ]
+            raw_steps = self.env.chunk_step_fast(np_actions, render_mask)
+            for i, raw_step in enumerate(raw_steps):
+                extracted_obs, step_reward, terminations, truncations, infos = (
+                    self._after_env_step(
+                        raw_step, auto_reset=False, _skip_obs_wrap=not render_mask[i]
+                    )
+                )
+                obs_list.append(extracted_obs)
+                infos_list.append(infos)
+                chunk_rewards.append(step_reward)
+                raw_chunk_terminations.append(terminations)
+                raw_chunk_truncations.append(truncations)
+            chunk_size = 0  # the per-step loop below is skipped
         try:
             for i in range(chunk_size):
                 should_render = (not self.skip_intermediate_renders) or (

@@ -77,6 +77,7 @@ class RecordVideo(gym.Wrapper):
         self.video_cnt = 0
         self._num_envs = getattr(env, "num_envs", 1)
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._compose_executor = ThreadPoolExecutor(max_workers=1)
         self._save_futures: list[Future] = []
 
         if fps is not None:
@@ -311,25 +312,36 @@ class RecordVideo(gym.Wrapper):
         terminations: Optional[Any],
         time_idx: Optional[int] = None,
     ) -> None:
-        """Overlay info (optional) and append a tiled frame."""
+        """Overlay info (optional) and append a tiled frame.
+
+        faster-rlinf: the overlay text is built here (it reads ``infos``/``rewards`` that the
+        caller may reuse), the images are copied, and the text drawing + tiling run on a
+        background thread; ``flush_video`` collects the frames in order. The frames are the
+        same pixels as before, only produced off the env step's critical path.
+        """
         if not images:
             return
+        info_items = None
         if self.video_cfg.get("info_on_video", True):
+            info_items = [
+                self._build_info_item(infos, rewards, terminations, env_id, time_idx)
+                for env_id in range(len(images))
+            ]
+        images = [np.array(img, copy=True) for img in images]
+        self.render_images.append(
+            self._compose_executor.submit(self._compose_frame, images, info_items)
+        )
+
+    @staticmethod
+    def _compose_frame(images, info_items):
+        if info_items is not None:
             images = [
-                put_info_on_image(
-                    img,
-                    self._build_info_item(
-                        infos, rewards, terminations, env_id, time_idx
-                    ),
-                )
-                for env_id, img in enumerate(images)
+                put_info_on_image(img, item) for img, item in zip(images, info_items)
             ]
         if len(images) > 1:
             nrows = int(np.sqrt(len(images)))
-            full_image = tile_images(images, nrows=nrows)
-            self.render_images.append(full_image)
-        else:
-            self.render_images.append(images[0])
+            return tile_images(images, nrows=nrows)
+        return images[0]
 
     def add_new_frames(
         self,
@@ -457,7 +469,9 @@ class RecordVideo(gym.Wrapper):
 
         os.makedirs(output_dir, exist_ok=True)
         mp4_path = os.path.join(output_dir, f"{self.video_cnt}.mp4")
-        frames = list(self.render_images)
+        frames = [
+            f.result() if isinstance(f, Future) else f for f in self.render_images
+        ]
         self.render_images = []
         self.video_cnt += 1
         future = self._submit_save(frames, mp4_path)
@@ -491,6 +505,7 @@ class RecordVideo(gym.Wrapper):
 
     def close(self):
         """Wait for pending video writes before closing."""
+        self._compose_executor.shutdown(wait=True)
         self._executor.shutdown(wait=True)
         self._save_futures = []
         return super().close()
