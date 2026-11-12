@@ -66,9 +66,10 @@ Script: [`faster_rlinf_bench/e2e/run_pair.sh`](faster_rlinf_bench/e2e/run_pair.s
 | OpenVLA-OFT, `libero_10_grpo_openvlaoft` | 1181.1 | 782.8 | **1.51×** | 188.7→77.3 s (2.4×) | 404.3→263.8 s (1.53×) | 195.8→0.6 s | 315.6→349.3 s ¹ |
 
 ¹ OpenVLA-OFT offloads the actor and the rollout model every iteration (`enable_offload: True`); weight
-sync went 80.6→35.3 s. Its training phase was ~10% slower in the faster-rlinf run of both OFT pairs; the
-rollout's CUDA graphs stayed resident on the GPU while the rollout weights were offloaded, which is fixed
-by row 11 below (measurement pending).
+sync went 80.6→35.3 s. Its training phase was ~10% slower in the faster-rlinf run of both OFT pairs. Releasing
+the rollout's CUDA graphs on offload (row 11) did not change it measurably (short-config A/B: training
+70.6→69.1 s). Not yet explained; a candidate cause is the reset prefetch of the next iteration's first
+episode running concurrently with actor training.
 
 Policy inference alone (frozen judges, hidden inputs, batch 8, bit-identical outputs): π0.5 2.93×,
 OpenVLA-OFT 1.69×, GR00T 2.91× (π0.5 flow-noise config, batch 40: 1.55×).
