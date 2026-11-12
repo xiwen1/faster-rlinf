@@ -43,6 +43,11 @@ from rlinf.scheduler import Worker
 from rlinf.utils.utils import clear_memory
 
 
+# faster-rlinf: FSDP_PINNED_OFFLOAD=0 restores pageable, synchronous offload copies.
+_PINNED_OFFLOAD = os.environ.get("FSDP_PINNED_OFFLOAD", "1") != "0"
+_OFFLOAD_KEEPALIVE: list = []
+
+
 class FSDPStrategy(FSDPStrategyBase):
     _FSDP_CACHE_ATTRS = (
         "_mp_shard",
@@ -78,7 +83,27 @@ class FSDPStrategy(FSDPStrategyBase):
     ) -> torch.Tensor | None:
         if tensor is None or tensor.device == torch.device(device):
             return tensor
+        if (
+            _PINNED_OFFLOAD
+            and torch.device(device).type == "cpu"
+            and tensor.device.type == Worker.torch_device_type
+        ):
+            # faster-rlinf: offload into page-locked host memory (reused by torch's caching
+            # host allocator) with an asynchronous copy, instead of a fresh pageable
+            # allocation filled by a synchronous copy. Same bytes. The source stays alive
+            # until _finish_offload() has synchronized, so its device memory cannot be
+            # reused (e.g. by an allocation on another stream) before the copy has read it.
+            out = torch.empty_like(tensor, device="cpu", pin_memory=True)
+            out.copy_(tensor, non_blocking=True)
+            _OFFLOAD_KEEPALIVE.append(tensor)
+            return out
         return tensor.to(device, non_blocking=True)
+
+    @staticmethod
+    def _finish_offload() -> None:
+        if _OFFLOAD_KEEPALIVE:
+            torch.cuda.synchronize()
+            _OFFLOAD_KEEPALIVE.clear()
 
     @staticmethod
     def _free_tensor_storage(tensor: torch.Tensor | None) -> None:
@@ -261,6 +286,7 @@ class FSDPStrategy(FSDPStrategyBase):
         for _, buffer in model.named_buffers():
             buffer.data = self._move_tensor(buffer.data, "cpu")
 
+        self._finish_offload()
         clear_memory()
 
     @torch.no_grad()
@@ -324,7 +350,8 @@ class FSDPStrategy(FSDPStrategyBase):
                 state = optimizer.state[param]
                 for key, value in state.items():
                     if isinstance(value, torch.Tensor):
-                        state[key] = value.to("cpu", non_blocking=True)
+                        state[key] = self._move_tensor(value, "cpu")
+        self._finish_offload()
         clear_memory()
 
     @torch.no_grad()
