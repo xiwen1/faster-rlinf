@@ -18,6 +18,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+import os
+
 import torch
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
@@ -33,6 +35,10 @@ from .base import RecvFn, SendFn, WeightSyncer
 from .bucket_syncer import BucketWeightSyncer, iter_named_tensor_buckets
 from .compressor import PatchCompressor
 
+
+
+# faster-rlinf: PATCH_DENSE_SNAPSHOT_UPDATE=0 keeps the per-element host scatter.
+_DENSE_SNAPSHOT_UPDATE = os.environ.get("PATCH_DENSE_SNAPSHOT_UPDATE", "1") != "0"
 
 def downscale_nonnegative_indices(tensor: torch.Tensor) -> torch.Tensor:
     """Cast nonnegative index tensors to the smallest supported integer dtype.
@@ -517,6 +523,9 @@ class CPUSnapshotPatchBuilder(PatchBuilder):
                 rows=rows,
                 cols=cols,
                 values=values,
+                changed=changed,
+                compare_value=compare_value,
+                snapshot_on_device=current.snapshot_on_state_device,
             )
 
             if self.delta_encoding:
@@ -640,7 +649,25 @@ class CPUSnapshotPatchBuilder(PatchBuilder):
         rows: torch.Tensor,
         cols: torch.Tensor,
         values: torch.Tensor,
+        changed: torch.Tensor | None = None,
+        compare_value: torch.Tensor | None = None,
+        snapshot_on_device: torch.Tensor | None = None,
     ) -> None:
+        if (
+            changed is not None
+            and _DENSE_SNAPSHOT_UPDATE
+            and rows.numel() * 4 >= snapshot_value.numel()
+        ):
+            # faster-rlinf: after an optimizer step most entries change; scattering
+            # them one by one on the host (plus copying int64 row/col indices there)
+            # dominated the weight sync of large models. where(changed, new, old) on
+            # the device is exactly the scattered result (entries that compare equal,
+            # e.g. -0.0 vs 0.0, keep the old bits), copied densely into the pinned
+            # snapshot.
+            snapshot_value.copy_(
+                torch.where(changed, compare_value, snapshot_on_device)
+            )
+            return
         rows_cpu = rows.to(device="cpu", non_blocking=False)
         cols_cpu = cols.to(device="cpu", non_blocking=False)
         values_cpu = values.to(device="cpu", non_blocking=False)
@@ -1161,37 +1188,54 @@ class PatchWeightSyncer(WeightSyncer):
             ]
             value_byte_offset += value_nbytes
 
+            # faster-rlinf: when the receiving model is offloaded to the host (rollout
+            # enable_offload) and most of this tensor changed, decode the indices and
+            # run the same index_put (unique indices, plain assignment, so exactly the
+            # same result) on the accelerator holding the patch, then copy the tensor
+            # back densely, instead of a per-element host scatter.
+            target = value_2dview
+            if (
+                _DENSE_SNAPSHOT_UPDATE
+                and value_2dview.device.type == "cpu"
+                and row_slice.device.type == Worker.torch_device_type
+                and nnz * 4 >= value_2dview.numel()
+            ):
+                target = value_2dview.to(device=row_slice.device, non_blocking=False)
+
             if self.delta_encoding:
                 row_delta = row_slice
                 col_delta = col_slice
-                if row_delta.device != value_2dview.device:
+                if row_delta.device != target.device:
                     row_delta = row_delta.to(
-                        device=value_2dview.device,
+                        device=target.device,
                         non_blocking=False,
                     )
-                if col_delta.device != value_2dview.device:
+                if col_delta.device != target.device:
                     col_delta = col_delta.to(
-                        device=value_2dview.device,
+                        device=target.device,
                         non_blocking=False,
                     )
                 rows, cols = PatchBuilder.delta_decode(row_delta, col_delta)
             else:
                 rows = row_slice.to(
-                    device=value_2dview.device,
+                    device=target.device,
                     dtype=torch.int64,
                     non_blocking=False,
                 )
                 cols = col_slice.to(
-                    device=value_2dview.device,
+                    device=target.device,
                     dtype=torch.int64,
                     non_blocking=False,
                 )
 
             value_slice = value_byte_slice.clone().view(value_2dview.dtype)
-            value_2dview[rows, cols] = value_slice.to(
-                device=value_2dview.device,
+            target[rows, cols] = value_slice.to(
+                device=target.device,
                 non_blocking=False,
             )
+            if target is not value_2dview:
+                value_2dview.copy_(target)
+                del target
 
         assert offset == patch.rows.numel(), "Patch offsets do not match payload size"
 
