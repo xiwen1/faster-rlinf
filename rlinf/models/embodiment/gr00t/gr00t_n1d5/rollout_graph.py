@@ -52,6 +52,8 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
+from rlinf.models.embodiment.repeat_rng import repeat_rng
+
 logger = logging.getLogger(__name__)
 
 _ENABLED = os.environ.get("RLINF_GR00T_CUDA_GRAPHS", "1") != "0"
@@ -698,6 +700,10 @@ class RolloutGraphs:
         bank["prefix"][0].replay()
         graph, out = bank["loops"][chosen]
         graph.replay()
+        # faster-rlinf: the value comes from the prefix (backbone + state features) only.
+        repeat_rng(m).commit(
+            bank.setdefault("repeat_inc", {}), chosen, hi if mode == "train" else None
+        )
         pre = bank["prefix"][1]
         x_0 = out["x_0"].clone()
         chains = out["chains"].clone()

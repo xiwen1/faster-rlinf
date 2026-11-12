@@ -37,6 +37,7 @@ from rlinf.models.embodiment.openpi.pi0 import Pi0, make_attn_mask
 from rlinf.models.embodiment.openpi.pi0_config import Pi0Config
 from rlinf.models.embodiment.openpi.sampling import rl_sampler
 from rlinf.models.embodiment.openpi.transforms.env import repack_env_obs
+from rlinf.models.embodiment.repeat_rng import repeat_rng
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,7 @@ class Pi0RL(EnvIO, Pi0):
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         del kwargs
+        repeat_rng(self).begin(self.device)
         repacked = repack_env_obs(
             self.config_name,
             env_obs,
@@ -770,6 +772,14 @@ class Pi0RL(EnvIO, Pi0):
         graph, out = bank["graphs"][chosen]
         graph.replay()
         res = {k: v.clone() for k, v in out.items()}
+        if compute_values and not (rl_cfg.add_value_head and not rl_cfg.value_after_vlm):
+            # faster-rlinf: values come from the prefix only, so a repeat of this call
+            # (terminal-value request) can be replaced by its RNG consumption.
+            repeat_rng(self).commit(
+                bank.setdefault("repeat_inc", {}),
+                chosen,
+                None if rl_cfg.joint_logprob else hi,
+            )
 
         x_0 = res["x_0"]
         actions = self.decode_actions(x_0, observation.state)

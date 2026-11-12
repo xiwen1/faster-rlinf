@@ -39,6 +39,8 @@ from rlinf.utils.utils import (
 )
 
 from . import fast_inputs as fast_inputs_mod
+from rlinf.models.embodiment.repeat_rng import repeat_rng
+
 from . import fast_llm, rollout_graph
 
 # RLINF_OFT_FAST_LLM=0 disables the fused (bitwise-identical) language-model path of the rollout.
@@ -224,6 +226,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         calculate_values=True,
         **kwargs,
     ) -> tuple[np.ndarray, dict[str, Any]]:
+        repeat_rng(self).begin(self.device)
         do_sample = kwargs.pop("do_sample")
         host_text = None
 

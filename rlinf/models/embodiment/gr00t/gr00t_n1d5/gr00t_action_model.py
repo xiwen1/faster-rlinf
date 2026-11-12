@@ -38,6 +38,7 @@ from rlinf.models.embodiment.gr00t.gr00t_n1d5.fast_transform import (
     fast_groot_apply,
 )
 from rlinf.models.embodiment.gr00t.gr00t_n1d5.rollout_graph import RolloutGraphs
+from rlinf.models.embodiment.repeat_rng import repeat_rng
 from rlinf.models.embodiment.gr00t.simulation_io import (
     ACTION_CONVERSION_N1D5,
     OBS_CONVERSION,
@@ -582,6 +583,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         mode: Literal["train", "eval"] = "train",
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
+        repeat_rng(self).begin(self.device)
         # Here we have a source causing tiny inference-training inconsistency,
         # force convert the state to bf16 then back to float32 to reproduce the info loss in training.
         env_obs["states"] = env_obs["states"].to(torch.bfloat16)

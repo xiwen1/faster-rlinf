@@ -35,6 +35,8 @@ import random
 
 import numpy as np
 import torch
+
+from rlinf.models.embodiment.repeat_rng import repeat_rng
 import torch.nn.functional as F
 from prismatic.vla.constants import STOP_INDEX
 from transformers.generation import TopKLogitsWarper
@@ -255,4 +257,7 @@ class RolloutGraphs:
             for s, t in zip(bank["static"], inputs):
                 s.copy_(t)
         bank["graph"].replay()
+        # faster-rlinf: the values do not depend on the sampled tokens (multinomial runs on
+        # the logits), so a repeat of this call reduces to its CUDA RNG advance.
+        repeat_rng(model).commit(bank.setdefault("repeat_inc", {}), None, None)
         return tuple(t.clone() for t in bank["out"])

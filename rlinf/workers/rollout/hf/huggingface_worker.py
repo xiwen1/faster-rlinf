@@ -40,6 +40,7 @@ from rlinf.data.schema.embodied_types import (
 from rlinf.hybrid_engines.weight_syncer import WeightSyncer
 from rlinf.models import get_model
 from rlinf.models.embodiment.base_policy import BasePolicy
+from rlinf.models.embodiment.repeat_rng import repeat_rng
 from rlinf.scheduler import Channel, Cluster, Worker, split_channel_message
 from rlinf.utils.obs_compression import decompress_obs, infer_obs_batch_size
 from rlinf.utils.placement import HybridComponentPlacement
@@ -730,6 +731,7 @@ class MultiStepRolloutWorker(Worker):
         policy_obs: dict[str, Any] | None,
         next_rlt_obs: dict[str, Any] | None,
         actor_channel: Channel,
+        action_result: dict[str, Any] | None = None,
     ) -> None:
         next_obs = env_part.next_obs if env_part.next_obs is not None else policy_obs
         final_prev_values = None
@@ -739,7 +741,13 @@ class MultiStepRolloutWorker(Worker):
                 raise ValueError(
                     "Terminal inference requires a post-action observation."
                 )
-            _, result = self._predict_rollout_actions(next_obs)
+            if action_result is not None and self._repeat_terminal_inference():
+                # faster-rlinf: the request repeats the call just made on this same
+                # observation; its value is that call's value, and the random numbers the
+                # repeat would consume are consumed without running it (repeat_rng.py).
+                result = action_result
+            else:
+                _, result = self._predict_rollout_actions(next_obs)
             values = result.get("prev_values")
             if values is not None:
                 final_prev_values = values.cpu().contiguous()
@@ -757,11 +765,23 @@ class MultiStepRolloutWorker(Worker):
             async_op=True,
         )
 
+    def _repeat_terminal_inference(self) -> bool:
+        """faster-rlinf: replace a terminal re-inference by its RNG consumption, if exact."""
+        if not self.cfg.rollout.get("reuse_terminal_inference", True):
+            return False
+        if self.enable_rlt or self.enable_dagger or self.expert_model is not None:
+            return False
+        if self.rlt_feature_model is not None:
+            return False
+        return repeat_rng(self.hf_model).advance_as_repeat()
+
     def _publish_env_parts(
         self,
         policy_input: PolicyInput,
         forward_inputs: dict[str, Any] | None,
         actor_channel: Channel,
+        action_result: dict[str, Any] | None = None,
+        action_batch: int | None = None,
     ) -> None:
         """Complete attached environment parts without duplicating request data."""
         if not policy_input.env_parts:
@@ -793,6 +813,13 @@ class MultiStepRolloutWorker(Worker):
             if needs_policy_obs
             else [None] * part_count
         )
+        # faster-rlinf: a terminal request on the whole batch just inferred (no separate
+        # post-action observation) repeats that call; see _publish_env_part.
+        reusable = (
+            action_result is not None
+            and part_count == 1
+            and list(policy_input.request_sizes) == [action_batch]
+        )
         for env_part, policy_obs, next_features in zip(
             policy_input.env_parts,
             policy_observations,
@@ -804,6 +831,11 @@ class MultiStepRolloutWorker(Worker):
                     policy_obs,
                     next_features,
                     actor_channel,
+                    action_result=(
+                        action_result
+                        if reusable and env_part.next_obs is None
+                        else None
+                    ),
                 )
 
     def _send_actions(
@@ -854,6 +886,7 @@ class MultiStepRolloutWorker(Worker):
                 )
                 if policy_input.is_last:
                     raise ValueError("Received a final input in the policy stream.")
+                result = None
                 if not policy_input.requires_inference:
                     actions = policy_input.external_actions
                     forward_inputs = None
@@ -892,7 +925,13 @@ class MultiStepRolloutWorker(Worker):
                 # arrives later through an EnvPart with the same key.
                 actor_channel.put(trajectory_part, async_op=True)
                 # Attached parts close previously executed chunks.
-                self._publish_env_parts(policy_input, forward_inputs, actor_channel)
+                self._publish_env_parts(
+                    policy_input,
+                    forward_inputs,
+                    actor_channel,
+                    action_result=result,
+                    action_batch=int(actions.shape[0]),
+                )
 
         if self.env_decoupled_mode:
             return
