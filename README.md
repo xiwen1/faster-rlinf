@@ -1,3 +1,7 @@
+> **This is faster-rlinf**, a performance fork of RLinf that makes embodied RL training (π0.5, OpenVLA-OFT, GR00T N1.5) faster while keeping results bit-identical.
+> Read [FASTER_RLINF.md](FASTER_RLINF.md) for what is changed, measured speed-ups and how they are verified; [MODIFICATIONS.md](MODIFICATIONS.md) lists every changed file.
+> Everything below this box is the unchanged upstream RLinf README.
+
 <div align="center">
   <img src="https://github.com/RLinf/misc/raw/main/pic/logo_white.svg" alt="RLinf-logo" width="600"/>
 </div>
