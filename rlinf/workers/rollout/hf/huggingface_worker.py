@@ -1046,6 +1046,15 @@ class MultiStepRolloutWorker(Worker):
     def offload_model(self):
         if self.enable_cuda_graph:
             self.hf_model.release_cuda_graph()
+        # faster-rlinf: drop the rollout fast paths' CUDA graphs (static buffers and
+        # private memory pools) together with the weights, so the actor gets that memory
+        # back during training. They would be re-captured after reload_model anyway
+        # (the reloaded parameters live at new addresses); capture saves and restores
+        # the RNG state, so results are unchanged.
+        for name in ("_graph_banks", "_rollout_graph_bank", "_rollout_graphs"):
+            self.hf_model.__dict__.pop(name, None)
+        if getattr(self.hf_model, "_graph_pool", None) is not None:
+            self.hf_model._graph_pool = None
         self.hf_model.to("cpu")
         if self.rlt_feature_model is not None:
             self.rlt_feature_model.to("cpu")
