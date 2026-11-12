@@ -126,6 +126,30 @@ else:
 _repoint_libero_config(_libero_core)
 
 
+def _same_reset_request(a: dict, b: dict) -> bool:
+    """Field-by-field equality of two fast-reset requests (arrays compared exactly)."""
+
+    def same(x, y):
+        if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
+            x, y = np.asarray(x), np.asarray(y)
+            return x.dtype == y.dtype and x.shape == y.shape and np.array_equal(x, y)
+        if torch.is_tensor(x) or torch.is_tensor(y):
+            return (
+                torch.is_tensor(x)
+                and torch.is_tensor(y)
+                and x.dtype == y.dtype
+                and x.shape == y.shape
+                and torch.equal(x, y)
+            )
+        if isinstance(x, dict) and isinstance(y, dict):
+            return x.keys() == y.keys() and all(same(x[k], y[k]) for k in x)
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return len(x) == len(y) and all(same(u, v) for u, v in zip(x, y))
+        return type(x) is type(y) and x == y
+
+    return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+
+
 class LiberoEnv(gym.Env):
     def __init__(self, cfg, num_envs, seed_offset, total_num_processes, worker_info):
         self.seed_offset = seed_offset
@@ -830,7 +854,7 @@ class LiberoEnv(gym.Env):
             init_state = self._get_reset_states(env_idx=env_idx)
             self.env.set_init_state(init_state=init_state, id=env_idx)
 
-    def _fast_reset(self, reset_state_ids, env_idx, num_steps_wait):
+    def _plan_fast_reset(self, reset_state_ids, env_idx, num_steps_wait):
         """faster-rlinf: ``_reconfigure`` + the settle loop as one parallel worker command.
 
         Main-process bookkeeping (task/trial ids, env_fn params, seeds, init states, settle
@@ -873,24 +897,97 @@ class LiberoEnv(gym.Env):
                 zero_actions[:, -1] = -1
             wait_actions.append(zero_actions)
         wait_actions = np.stack(wait_actions, axis=1)  # [n_env, n_wait, 7]
-        last = self.env.reset_episodes_fast(
-            env_idx,
-            reconfigure_params,
-            seeds,
-            init_states,
-            wait_actions,
-            render_all=False,
+        return {
+            "env_idx": env_idx,
+            "reconfigure_params": reconfigure_params,
+            "seeds": seeds,
+            "init_states": init_states,
+            "wait_actions": wait_actions,
+        }
+
+    def _fast_reset(self, reset_state_ids, env_idx, num_steps_wait):
+        request = self._plan_fast_reset(reset_state_ids, env_idx, num_steps_wait)
+        prefetched = self._take_prefetched_reset(request)
+        if prefetched is not None:
+            raw_obs = prefetched
+        else:
+            last = self.env.reset_episodes_fast(**request, render_all=False)
+            raw_obs = [r[0] for r in last]
+        self._launch_reset_prefetch(env_idx, num_steps_wait)
+        return raw_obs
+
+    # ------------------------------------------------------------------
+    # faster-rlinf: speculative reset prefetch on a second set of env workers.
+    #
+    # Right after a reset, the request of the *next* reset is predicted by running the
+    # same main-process bookkeeping on a copy of the env's state (as the env worker will:
+    # ``update_reset_state_ids()`` at the end of the epoch, then ``is_start = True`` and
+    # ``reset()``) and sent to a spare set of worker processes, which execute it while the
+    # current episode is being stepped. At the real reset the real request is computed as
+    # always and compared field by field with the predicted one; only an identical request
+    # takes the prefetched result (and the two worker sets swap roles), anything else
+    # discards it and resets normally. Used only in training mode, where every reset
+    # rebuilds every env, so the env a worker process held before does not matter.
+    # ``reset_prefetch: False`` turns it off.
+    # ------------------------------------------------------------------
+    _SPEC_DEEPCOPY_ATTRS = (
+        "_generator",
+        "_generator_ordered",
+        "reset_state_ids",
+        "reset_state_ids_all",
+        "task_ids",
+        "trial_ids",
+        "task_descriptions",
+        "_pert_init_folders",
+        "_eval_reset_pool",
+    )
+
+    def _reset_prefetch_enabled(self) -> bool:
+        return (
+            self.fast_vector_env
+            and not self.is_eval
+            and bool(OmegaConf.select(self.cfg, "reset_prefetch", default=True))
         )
+
+    def _launch_reset_prefetch(self, env_idx, num_steps_wait):
+        if not self._reset_prefetch_enabled() or len(env_idx) != self.num_envs:
+            return
+        spec = copy.copy(self)
+        for name in self._SPEC_DEEPCOPY_ATTRS:
+            if name in self.__dict__:
+                setattr(spec, name, copy.deepcopy(self.__dict__[name]))
+        spec._prefetch = None
+        try:
+            spec.update_reset_state_ids()
+            spec._is_start = True
+            all_idx = np.arange(self.num_envs)
+            ids = spec._next_reset_state_ids(all_idx, None)
+            request = spec._plan_fast_reset(ids, all_idx, num_steps_wait)
+        except Exception as e:  # noqa: BLE001  (prediction is best effort)
+            logger.warning(f"[faster-rlinf] reset prefetch prediction failed: {e!r}")
+            return
+        if len(request["reconfigure_params"]) != self.num_envs:
+            return
+        if getattr(self, "_spare_env", None) is None:
+            # Built from the prediction copy: get_env_fns() rewrites task_descriptions.
+            # Every spare env is rebuilt by the prefetched request anyway.
+            self._spare_env = ReconfigureSubprocEnv(spec.get_env_fns())
+        self._spare_env.reset_episodes_fast_send(**request, render_all=False)
+        self._prefetch = request
+
+    def _take_prefetched_reset(self, request):
+        pending = getattr(self, "_prefetch", None)
+        if pending is None:
+            return None
+        self._prefetch = None
+        last = self._spare_env.reset_episodes_fast_recv(pending["env_idx"])
+        if not _same_reset_request(pending, request):
+            return None
+        self.env, self._spare_env = self._spare_env, self.env
         return [r[0] for r in last]
 
-    def reset(
-        self,
-        env_idx: Optional[Union[int, list[int], np.ndarray]] = None,
-        reset_state_ids=None,
-    ):
-        if env_idx is None:
-            env_idx = np.arange(self.num_envs)
-
+    def _next_reset_state_ids(self, env_idx, reset_state_ids):
+        """The reset-state-id selection at the top of ``reset`` (mutates the same state)."""
         if self.is_start:
             if self.is_eval:
                 self._task_success_stats = {}
@@ -907,6 +1004,17 @@ class LiberoEnv(gym.Env):
         if reset_state_ids is None:
             num_reset_states = len(env_idx)
             reset_state_ids = self._get_random_reset_state_ids(num_reset_states)
+        return reset_state_ids
+
+    def reset(
+        self,
+        env_idx: Optional[Union[int, list[int], np.ndarray]] = None,
+        reset_state_ids=None,
+    ):
+        if env_idx is None:
+            env_idx = np.arange(self.num_envs)
+
+        reset_state_ids = self._next_reset_state_ids(env_idx, reset_state_ids)
 
         # Preserve LIBERO's existing 15-step settling behavior unless a model
         # explicitly requests a different reset wait (FastWAM uses 30).

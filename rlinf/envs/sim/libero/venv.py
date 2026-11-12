@@ -401,6 +401,20 @@ class ReconfigureSubprocEnv(SubprocVectorEnv):
         does); ``init_states``: one per ``env_idx`` entry or None; ``wait_actions``:
         [len(env_idx), num_steps_wait, action_dim]. Returns the last settle-step obs per env.
         """
+        self.reset_episodes_fast_send(
+            env_idx, reconfigure_params, seeds, init_states, wait_actions, render_all,
+            extract,
+        )
+        return self.reset_episodes_fast_recv(env_idx)
+
+    def reset_episodes_fast_recv(self, env_idx):
+        return [self.workers[int(i)].parent_remote.recv() for i in env_idx]
+
+    def reset_episodes_fast_send(
+        self, env_idx, reconfigure_params, seeds, init_states, wait_actions, render_all,
+        extract=True,
+    ):
+        """Send half of ``reset_episodes_fast`` (results collected by ``*_recv``)."""
         self._assert_is_not_closed()
         assert not self.is_async
         idx = [int(i) for i in env_idx]
@@ -424,7 +438,6 @@ class ReconfigureSubprocEnv(SubprocVectorEnv):
                     },
                 ]
             )
-        return [self.workers[i].parent_remote.recv() for i in idx]
 
     def set_camera_rendering(self, enabled: bool, id=None):
         self._assert_is_not_closed()

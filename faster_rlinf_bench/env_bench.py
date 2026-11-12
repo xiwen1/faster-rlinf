@@ -94,6 +94,8 @@ def run_bench(args):
            "init_s": t_init, "epochs_data": []}
     for ep in range(args.epochs):
         e = {"steps": []}
+        # As EnvWorker.bootstrap_step does at every epoch start.
+        env.is_start = True
         t = time.perf_counter()
         obs, info = env.reset()
         e["reset_s"] = time.perf_counter() - t
@@ -108,6 +110,8 @@ def run_bench(args):
             t = time.perf_counter()
             obs_list, rew, term, trunc, infos = env.chunk_step(a)
             step_t.append(time.perf_counter() - t)
+            if args.policy_ms:
+                time.sleep(args.policy_ms / 1000.0)  # stand-in for the policy call
             if args.digest_all or c == steps_per_epoch - 1 or c % 8 == 0:
                 e["steps"].append({"c": c, "obs": digest(obs_list[-1]),
                                    "obs_all": digest(obs_list) if args.digest_all else None,
@@ -125,6 +129,8 @@ def run_bench(args):
         fl = getattr(env, "flush_video", None)
         if callable(fl):
             fl()
+        # As EnvWorker.finish_rollout does at every epoch end.
+        env.update_reset_state_ids()
         e["flush_s"] = time.perf_counter() - t
         rec["epochs_data"].append(e)
         print(f"epoch {ep}: reset {e['reset_s']:.2f}s  chunk_step sum {e['chunk_step_sum_s']:.2f}s "
@@ -202,6 +208,7 @@ if __name__ == "__main__":
     ap.add_argument("--action-seed", type=int, default=0)
     ap.add_argument("--scale", type=float, default=0.5)
     ap.add_argument("--profile-steps", type=int, default=50)
+    ap.add_argument("--policy-ms", type=float, default=0.0, help="sleep per chunk (policy stand-in)")
     ap.add_argument("--cprofile", type=int, default=0)
     ap.add_argument("override", nargs="*")
     args = ap.parse_args()
