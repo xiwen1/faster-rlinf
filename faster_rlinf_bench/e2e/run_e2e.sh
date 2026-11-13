@@ -48,6 +48,7 @@ cd "$TREE"
   echo "MODEL=$MODEL CFG=$CFG TREE=$TREE commit=$(git -C "$TREE" rev-parse HEAD 2>/dev/null) dirty=$(git -C "$TREE" status --porcelain 2>/dev/null | wc -l)"
   echo "TAG=$TAG G=$G iterations=$NE extra=$* RAY_ADDRESS=$RAY_ADDRESS"
   echo "host=$(hostname) CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES start=$(date -Is) loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+  echo "env: $(env | grep -E "^(FSDP_|PATCH_|RLINF_)" | sort | tr "\n" " ")"
   nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
 } > "$RUN/meta.txt"
 T0=$(date +%s.%N)

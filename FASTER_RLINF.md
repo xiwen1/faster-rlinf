@@ -66,16 +66,21 @@ Script: [`faster_rlinf_bench/e2e/run_pair.sh`](faster_rlinf_bench/e2e/run_pair.s
 | OpenVLA-OFT, `libero_10_grpo_openvlaoft` | 1181.1 | 782.8 | **1.51×** | 188.7→77.3 s (2.4×) | 404.3→263.8 s (1.53×) | 195.8→0.6 s | 315.6→349.3 s ¹ |
 
 ¹ OpenVLA-OFT offloads the actor and the rollout model every iteration (`enable_offload: True`); weight
-sync went 80.6→35.3 s. Its training phase was ~10% slower in the faster-rlinf run of both OFT pairs. Releasing
-the rollout's CUDA graphs on offload (row 11) did not change it measurably (short-config A/B: training
-70.6→69.1 s). Not yet explained; a candidate cause is the reset prefetch of the next iteration's first
-episode running concurrently with actor training.
+sync went 80.6→35.3 s. The ~10% slower training phase in this pair is **not caused by faster-rlinf**:
+the training phase is GPU-compute-bound (py-spy: backward 65%, forward 12%, loading weights and
+optimizer ~1%), and on the same idle physical GPU of one node, upstream and
+faster-rlinf train equally fast (278.9 s vs 280.3 s per iteration, 3 steady iterations each; turning the
+reset prefetch off: 283.6 s). The faster-rlinf GPU of this pair was not idle
+when the run started; a later pair whose faster-rlinf GPU stopped being idle
+mid-run measured 674 s instead of ~280 s. With a clean training phase this pair would be about 1.58×.
 
 Policy inference alone (frozen judges, hidden inputs, batch 8, bit-identical outputs): π0.5 2.93×,
 OpenVLA-OFT 1.69×, GR00T 2.91× (π0.5 flow-noise config, batch 40: 1.55×).
 
 Numbers depend on the host: environment stepping and host-side inference are CPU-bound, and these
-nodes were not reserved for the benchmark (load average 30–45 during the runs above).
+nodes were not reserved for the benchmark (load average 30–45 during the runs above). Check that no other
+process runs on the benchmark GPUs: `run_group.sh` with `FRL_SAMPLE=1` logs every process on the leased
+GPUs every 30 s, plus SM clock, power and throttle reasons every 5 s.
 
 ### Tried and not adopted
 
@@ -108,6 +113,10 @@ python faster_rlinf_bench/env_compare.py out/ref out/cand --videos
 
 # end-to-end, 2 GPUs of one node (CUDA_VISIBLE_DEVICES=a,b), 3 iterations
 FRL_ASSETS=<dir with venv/ and weights/> faster_rlinf_bench/e2e/run_pair.sh pi05 <upstream-tree> <this-tree> pi05 3
+
+# several arms at once, one GPU each (here: 2 GPUs), with GPU/process sampling and actor py-spy profiles
+FRL_SAMPLE=1 faster_rlinf_bench/e2e/run_group.sh oft 4 oftpf cand:<this-tree> nopf:<this-tree>:+env.train.reset_prefetch=false
+python faster_rlinf_bench/e2e/train_breakdown.py <out>/oftpf-group/oftpf-cand-actor.raw
 ```
 
 ## License and attribution

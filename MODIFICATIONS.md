@@ -11,7 +11,9 @@ As required by section 4(b) of the Apache License 2.0, the files below were chan
 | added | `faster_rlinf_bench/e2e/analyze_e2e.py` |
 | added | `faster_rlinf_bench/e2e/dump_tb.py` |
 | added | `faster_rlinf_bench/e2e/run_e2e.sh` |
+| added | `faster_rlinf_bench/e2e/run_group.sh` |
 | added | `faster_rlinf_bench/e2e/run_pair.sh` |
+| added | `faster_rlinf_bench/e2e/train_breakdown.py` |
 | added | `faster_rlinf_bench/env_bench.py` |
 | added | `faster_rlinf_bench/env_compare.py` |
 | added | `faster_rlinf_bench/env_run.sh` |
@@ -19,6 +21,7 @@ As required by section 4(b) of the Apache License 2.0, the files below were chan
 | added | `faster_rlinf_bench/patch_check.py` |
 | added | `faster_rlinf_bench/repeat_check.py` |
 | added | `faster_rlinf_bench/repeat_check.sh` |
+| added | `faster_rlinf_bench/u8_normalize_check.py` |
 | added | `faster_rlinf_bench/workloads/gr00t/model_cfg.json` |
 | added | `faster_rlinf_bench/workloads/gr00t/workload.py` |
 | added | `faster_rlinf_bench/workloads/oft/model_cfg.json` |
