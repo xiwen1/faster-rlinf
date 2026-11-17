@@ -63,16 +63,18 @@ Script: [`faster_rlinf_bench/e2e/run_pair.sh`](faster_rlinf_bench/e2e/run_pair.s
 |---|---|---|---|---|---|---|---|
 | π0.5, `libero_object_ppo_openpi_pi05` | 331.0 | 151.8 | **2.18×** | 156.1→37.0 s (4.2×) | 94.4→60.9 s (1.55×) | 78.2→0.3 s | 38.6→37.1 s |
 | GR00T N1.5, `libero_spatial_ppo_gr00t` | 342.9 | 194.9 | **1.76×** | 104.3→28.2 s (3.7×) | 128.7→87.1 s (1.48×) | 83.0→0.3 s | 59.7→59.7 s |
-| OpenVLA-OFT, `libero_10_grpo_openvlaoft` | 1181.1 | 782.8 | **1.51×** | 188.7→77.3 s (2.4×) | 404.3→263.8 s (1.53×) | 195.8→0.6 s | 315.6→349.3 s ¹ |
+| OpenVLA-OFT, `libero_10_grpo_openvlaoft` ¹ | 1087.3 | 692.2 | **1.57×** | 190.2→72.1 s (2.6×) | 426.5→270.7 s (1.58×) | 160.5→0.6 s | 262.0→262.9 s |
 
 ¹ OpenVLA-OFT offloads the actor and the rollout model every iteration (`enable_offload: True`); weight
-sync went 80.6→35.3 s. The ~10% slower training phase in this pair is **not caused by faster-rlinf**:
-the training phase is GPU-compute-bound (py-spy: backward 65%, forward 12%, loading weights and
-optimizer ~1%), and on the same idle physical GPU of one node, upstream and
-faster-rlinf train equally fast (278.9 s vs 280.3 s per iteration, 3 steady iterations each; turning the
-reset prefetch off: 283.6 s). The faster-rlinf GPU of this pair was not idle
-when the run started; a later pair whose faster-rlinf GPU stopped being idle
-mid-run measured 674 s instead of ~280 s. With a clean training phase this pair would be about 1.58×.
+sync went 54.6→29.2 s. This row is a pair run with [`faster_rlinf_bench/e2e/run_group.sh`](faster_rlinf_bench/e2e/run_group.sh)
+(4 iterations, steady state = iterations 1–3) on two GPUs of one node that did no other work during the
+whole run (process list sampled every 30 s).
+An earlier pair (faster-rlinf dc463439) measured 1181.1→782.8 s, 1.51×, with a ~10% slower training phase
+(315.6→349.3 s): the faster-rlinf GPU of that pair was not idle. The training phase is
+GPU-compute-bound (py-spy: backward 65%, forward 12%, loading weights and optimizer ~1%), and on a clean GPU
+upstream and faster-rlinf train equally fast (above: 262.0 vs 262.9 s; on one physical GPU an hour apart: 278.9 vs
+280.3 s); another pair whose faster-rlinf GPU stopped being idle mid-run measured 674 s instead of
+~280 s for the training phase.
 
 Policy inference alone (frozen judges, hidden inputs, batch 8, bit-identical outputs): π0.5 2.93×,
 OpenVLA-OFT 1.69×, GR00T 2.91× (π0.5 flow-noise config, batch 40: 1.55×).
