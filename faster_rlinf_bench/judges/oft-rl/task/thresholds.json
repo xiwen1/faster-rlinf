@@ -1,0 +1,332 @@
+{
+ "gates": {
+  "rollout|r0|s0|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s0|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s1|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s2|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s3|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s4|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s5|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/actions": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/forward_inputs.action_tokens": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/forward_inputs.attention_mask": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/forward_inputs.input_ids": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/forward_inputs.pixel_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/prev_logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/prev_values": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/replay.entropy": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  },
+  "rollout|r0|s6|loss/replay.logprobs": {
+   "env": 0.0,
+   "gate": 1e-06,
+   "pooled_env": 0.0
+  }
+ },
+ "meta": {
+  "floor_bwd": 1e-05,
+  "floor_fwd": 1e-06,
+  "golden": null,
+  "k_bwd": 3.0,
+  "k_fwd": 2.0,
+  "pooling": "tensor family (call indices dropped) x all cases and ranks x steps up to this one",
+  "reference": "../.prep/f1/a/records",
+  "variants": [
+   "../.prep/f1/b/records"
+  ]
+ },
+ "ref_to_fp64": {}
+}

@@ -1,0 +1,104 @@
+{
+ "task": "GR00T N1.5 RL rollout step latency: RLinf GR00T_N1_5_ForRLActionPrediction.predict_action_batch(env_obs, mode='train') (flow_sde, noise level 0.5, 4 denoising steps) at batch 8 (RLinf 2348ece snapshot, model/gr00t.yaml with the libero_spatial_ppo_gr00t overrides: bf16, two 256x256 LIBERO cameras, 5 action chunks x 7 dims, prompt padded to 570 tokens, value head; checkpoint RLinf/RLinf-Gr00t-SFT-Spatial), one B200",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "evaluator_sha256": "03c948b789f3616fefb6b8893aa52d2d4b78051b100b4de171f245478d36fdee",
+ "inputs": {
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/.gitattributes": {
+   "kind": "sha256",
+   "value": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+  },
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/config.json": {
+   "kind": "sha256",
+   "value": "6713ae6e9ee07ebf30f18a231bedcf9c06f8c64595d62529b6eb175498ef0526"
+  },
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/experiment_cfg/metadata.json": {
+   "kind": "sha256",
+   "value": "0b8fffeb48a0bde4b12fb8cb2244136ddfebce60cd8b69c2233fdb4d55b85b24"
+  },
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/model-00001-of-00002.safetensors": {
+   "kind": "stat",
+   "value": "4999367032:1794267802019414768"
+  },
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/model-00002-of-00002.safetensors": {
+   "kind": "stat",
+   "value": "2586705312:1794266800925599686"
+  },
+  "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial/model.safetensors.index.json": {
+   "kind": "sha256",
+   "value": "bec674fcd06f1c6c29e5ab0f057d148a5c76e7ef92d1688d6b4b8f838afc9746"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/added_tokens.json": {
+   "kind": "sha256",
+   "value": "f6ec4747ee9acf6681f3e146371cf44bce6edd8d3018c504b976268857b6cc31"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/chat_template.json": {
+   "kind": "sha256",
+   "value": "12571c3e7ddce074f86a78daf21d9a81616c6f8eac19a20ca2fb558a0c9e759b"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/config.json": {
+   "kind": "sha256",
+   "value": "e6957b163b6c62b685f69fd9d601e183509d109246290ad579d461692d925dba"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/configuration_eagle2_5_vl.py": {
+   "kind": "sha256",
+   "value": "d1578a2d5b7654da9a5e4cb18acd5d9d92b04a227ddab9365c2e3265d6cf2f93"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/generation_config.json": {
+   "kind": "sha256",
+   "value": "7c36606c58ba30e8dfbc269cb542d93ee72889ebec5fcf3a5071b66451e8cfe1"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/image_processing_eagle2.py": {
+   "kind": "sha256",
+   "value": "e5d152ebaecca99ad730b9efaaec1029ba242857857914cd8edcb0c1181f411c"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/image_processing_eagle2_5_vl_fast.py": {
+   "kind": "sha256",
+   "value": "69b01110e7b1082eb1a195b2fe9881812891e0bfafb09a5013952802a6485f7d"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/merges.txt": {
+   "kind": "sha256",
+   "value": "85407d96ccd088398c5df07b7c764ed04dcc084b0e746f70016c16968be5e490"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/modeling_eagle2_5_vl.py": {
+   "kind": "sha256",
+   "value": "96554c1ca204cc6fb0bff636356b1f878d2ee47678b4a82e6378b59e98bb01d0"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/preprocessor_config.json": {
+   "kind": "sha256",
+   "value": "2d860eacf203d617d4c7ecca4125513b35ace1827b39ef8c0c1e45276e30f0e9"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/processing_eagle2_5_vl.py": {
+   "kind": "sha256",
+   "value": "d01aa0f243c01404f2d08096dd7a8e7c29cd8368834f1f3ba8d47f6ba29e46b6"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/processor_config.json": {
+   "kind": "sha256",
+   "value": "27e81bc3e0035c64987dd06870025c301ea6c5dd02f5d091cb463b7c84432ef8"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/radio_model.py": {
+   "kind": "sha256",
+   "value": "5a4338eb7617606565189b3cec9827c4ca2559c9178ae3a9873e6fb37724d514"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/special_tokens_map.json": {
+   "kind": "sha256",
+   "value": "a9086ab96352d779cbeb3665d1142a895540aec404d90641b2e2380d5dbb02b1"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/tokenizer_config.json": {
+   "kind": "sha256",
+   "value": "f58bacf742418429534015ac1c4f7a1a555db55d3fba48858f38ebb75a2a5660"
+  },
+  "$ASSETS/venv-gr00t/lib/python3.11/site-packages/gr00t/model/backbone/eagle2_hg_model/vocab.json": {
+   "kind": "sha256",
+   "value": "70f7cdb5ae22072d590b59fd726c9799e678a77701d32e87cd7b7106ed2a8ce8"
+  }
+ },
+ "records": "task/records/ref",
+ "timing_ref": "task/timing_ref.json",
+ "precision_floor": "N0",
+ "goal": {
+  "metric": "batch-8 rollout step P50 latency",
+  "primary_batch": 8,
+  "target_speedup": 2.0,
+  "minimum_speedup": 1.5
+ }
+}

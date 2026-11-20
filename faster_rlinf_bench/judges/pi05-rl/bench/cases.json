@@ -1,0 +1,9 @@
+[
+ {
+  "name": "rollout",
+  "seed": 2000,
+  "obs_seed": 2000,
+  "steps": 7,
+  "batch_sizes": [8, 8, 8, 40, 3, 8, 8]
+ }
+]

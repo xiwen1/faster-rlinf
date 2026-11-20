@@ -1,0 +1,96 @@
+{
+ "task": "OpenVLA-OFT RL rollout step latency: RLinf OpenVLAOFTForRLActionPrediction.predict_action_batch with the train sampling parameters (do_sample, temperature 1.6) at batch 8 (RLinf 2348ece snapshot, model/openvla_oft.yaml with the libero_10_grpo_openvlaoft overrides: bf16, one 256x256 LIBERO image, 8 action chunks x 7 dims, prompt padded to 128, no value head; checkpoint Haozhan72/Openvla-oft-SFT-libero10-traj1), one B200",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "evaluator_sha256": "5000db9880fe6c1710581e571920538edeb0fc113ffe40c095bcec3c6e1862be",
+ "inputs": {
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/.gitattributes": {
+   "kind": "sha256",
+   "value": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/README.md": {
+   "kind": "sha256",
+   "value": "d8d7a46d41a1a37fe4f0a5f637bf55c649310185329127d8a2204632e480be17"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/added_tokens.json": {
+   "kind": "sha256",
+   "value": "ab43123267b190cb7990bc9f2ae4ad32dcb7ed029fb0fccb1b4e062c6f54a2a1"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/config.json": {
+   "kind": "sha256",
+   "value": "903d317c0b6c66c26ab44d82c45cce661ddc7e3751a8bf6740a11fe2aadb715d"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/configuration_prismatic.py": {
+   "kind": "sha256",
+   "value": "68cc5ae34f1b46af3168d8d479cb81bb776965653453fd904aa8eefb6c8f9f68"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/dataset_statistics.json": {
+   "kind": "sha256",
+   "value": "dbe516987e8124416af39c32d3f39ce2137ccb4e282adc590bb4bcede09fb5e1"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/generation_config.json": {
+   "kind": "sha256",
+   "value": "67fbe17b12e8beb5be98eb911483971cc78589e51a37ac0cce9cd499d06a8bf1"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/model-00001-of-00004.safetensors": {
+   "kind": "stat",
+   "value": "4925122448:1794249310291123345"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/model-00002-of-00004.safetensors": {
+   "kind": "stat",
+   "value": "4947392496:1794249337228592688"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/model-00003-of-00004.safetensors": {
+   "kind": "stat",
+   "value": "4947417456:1794249552635879994"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/model-00004-of-00004.safetensors": {
+   "kind": "stat",
+   "value": "262668432:1794248848254057610"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/model.safetensors.index.json": {
+   "kind": "sha256",
+   "value": "ca8b53fed8133ee2afcd2fc483de8febf7f5bb0f6bcb09f91189772e59e8f659"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/modeling_prismatic.py": {
+   "kind": "sha256",
+   "value": "538c9ab87b470aa0c4266a28c387c3803c3f358fa189e905c3ee41ed6e8726a6"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/preprocessor_config.json": {
+   "kind": "sha256",
+   "value": "bd024783fb785cbdfe35b710b621c5e8678d4c157a9ba625675e67d40d1757da"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/processing_prismatic.py": {
+   "kind": "sha256",
+   "value": "06563586bbc73d36501a14a231a3174904ede830d33174d0c625ece8e931ef1e"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/processor_config.json": {
+   "kind": "sha256",
+   "value": "167e026d8121f6cb0bf5c18310b97ba8139152f970822bb3824213bd37dc7a76"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/special_tokens_map.json": {
+   "kind": "sha256",
+   "value": "cb90ee5cf5793aa444039af9795b00db59d3fef8942e7eca9cf1990bab370d61"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/tokenizer.json": {
+   "kind": "sha256",
+   "value": "8f5e2869e1807b8bb3c7717a294539c37e9de5d728ad60e31ef57e83cc5ea527"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/tokenizer.model": {
+   "kind": "sha256",
+   "value": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+  },
+  "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1/tokenizer_config.json": {
+   "kind": "sha256",
+   "value": "f5f1d3ed015ebb71cf11686ff00bc8e0c25957bbf3952f95312cecc9b168fbea"
+  }
+ },
+ "records": "task/records/ref",
+ "timing_ref": "task/timing_ref.json",
+ "precision_floor": "N0",
+ "goal": {
+  "metric": "batch-8 rollout step P50 latency",
+  "primary_batch": 8,
+  "target_speedup": 1.4,
+  "minimum_speedup": 1.2
+ }
+}

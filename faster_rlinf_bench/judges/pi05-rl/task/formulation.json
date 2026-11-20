@@ -1,0 +1,28 @@
+{
+ "task": "pi0.5 RL rollout step latency: RLinf Pi0RL.predict_action_batch(mode=\"train\") at batch 8 (RLinf 2348ece snapshot, pi0_5 flow_sde 5 steps, value head after the VLM, checkpoint RLinf/RLinf-Pi05-LIBERO-130-fullshot-SFT), one B200",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "evaluator_sha256": "eea0af04234292a227644d9ee4954515389096c1bbd7243a821ac09bb20a4f5c",
+ "inputs": {
+  "$ASSETS/weights/RLinf-Pi05-LIBERO-130-fullshot-SFT/model.safetensors": {
+   "kind": "stat",
+   "value": "7473091464:1793901115671502960"
+  },
+  "$ASSETS/weights/RLinf-Pi05-LIBERO-130-fullshot-SFT/physical-intelligence/libero/norm_stats.json": {
+   "kind": "sha256",
+   "value": "dae37d79a22108af83df9189c6710a3ec8e077d65b28e34bdf1da724e5ae30f1"
+  },
+  "$WORK/pi05-rl/home/.cache/openpi/big_vision/paligemma_tokenizer.model": {
+   "kind": "sha256",
+   "value": "8986bb4f423f07f8c7f70d0dbe3526fb2316056c17bae71b1ea975e77a168fc6"
+  }
+ },
+ "records": "task/records/ref",
+ "timing_ref": "task/timing_ref.json",
+ "precision_floor": "N0",
+ "goal": {
+  "metric": "batch-8 rollout step P50 latency",
+  "primary_batch": 8,
+  "target_speedup": 2.0,
+  "minimum_speedup": 1.5
+ }
+}

@@ -51,6 +51,18 @@ component by component, and end-to-end runs are used to measure wall-clock time.
 | 10 | FSDP offload | `.to("cpu")` into fresh pageable memory (synchronous, page faults) | page-locked host buffers (torch caching host allocator), asynchronous copies, one sync per offload | `FSDP_PINNED_OFFLOAD=0` |
 | 11 | Rollout offload | — | the rollout fast paths' CUDA graphs are released together with the offloaded weights (they are re-captured after reload anyway) | — |
 
+## How the speed-ups were found
+
+Rows 1–3 (policy inference) were found by optimizing agents (Claude Code) working under frozen judges built with
+[ResearchBoost-Agent](https://github.com/DAGroup-PKU/ResearchBoost-Agent). For each model, one RL rollout step became a
+benchmark task; its judge — a bitwise (N0) comparison of every output, the random-number state and the trainer-side
+replay, plus a timing gate — was frozen and its hash recorded before the agent started. The agent saw only the task,
+could only submit candidates to the judge, and the final verdict was computed on a clean checkout with a hidden input
+offset. The judges are in [`faster_rlinf_bench/judges/`](faster_rlinf_bench/judges/README.md).
+
+Rows 4–11 came afterwards, from profiling the end-to-end training with the inference already fast (the same kind of
+agent, outside a judge loop). Each of them is checked bit for bit by its own script (see [Verification](#verification)).
+
 ## Measured speed-up (real RLinf training, B200)
 
 Protocol: one GPU per run with the per-GPU load of the stock 8-GPU config (8 environments,
@@ -76,8 +88,9 @@ upstream and faster-rlinf train equally fast (above: 262.0 vs 262.9 s; on one ph
 280.3 s); another pair whose faster-rlinf GPU stopped being idle mid-run measured 674 s instead of
 ~280 s for the training phase.
 
-Policy inference alone (frozen judges, hidden inputs, batch 8, bit-identical outputs): π0.5 2.93×,
-OpenVLA-OFT 1.69×, GR00T 2.91× (π0.5 flow-noise config, batch 40: 1.55×).
+Policy inference alone (frozen judges, hidden inputs, batch 8, bit-identical outputs), on this repository: π0.5 2.97×,
+OpenVLA-OFT 1.70×, GR00T 2.82× (π0.5 flow-noise config, batch 40: 1.59×); earlier checks of the agents' trees and of
+the merged inference tree are in [`faster_rlinf_bench/judges/`](faster_rlinf_bench/judges/README.md#results).
 
 Numbers depend on the host: environment stepping and host-side inference are CPU-bound, and these
 nodes were not reserved for the benchmark (load average 30–45 during the runs above). Check that no other
@@ -97,17 +110,43 @@ GPUs every 30 s, plus SM clock, power and throttle reasons every 5 s.
 
 | Check | What it compares | Script |
 |---|---|---|
-| Policy inference | frozen judges: every output tensor + RNG fingerprint + trainer-side replay on hidden inputs, reference vs candidate | (judge harness, see research notes) |
+| Policy inference | frozen judges: every output tensor + RNG fingerprint + trainer-side replay on hidden inputs, reference vs candidate | [`faster_rlinf_bench/judges/`](faster_rlinf_bench/judges/README.md) |
 | Environment | seeded random action stream, same Hydra config and video wrapper; SHA-256 of every reset/step observation (both cameras, state), reward, termination, truncation; decoded video frames | `faster_rlinf_bench/env_bench.py`, `env_compare.py` |
 | Terminal value reuse | upstream doing the real second call vs faster-rlinf reusing it: first-call outputs, terminal values, Python/numpy/torch-CPU/CUDA RNG state after every step | `faster_rlinf_bench/repeat_check.sh` |
 | Patch weight sync | patches, sender snapshots and receiver (offloaded) parameters, new vs old path, incl. ±0.0 flips and NaN | `faster_rlinf_bench/patch_check.py` |
 
 Results at the time of writing: environment 5392 digests + 4 videos identical; terminal reuse PASS for
-π0.5, GR00T and OFT; patch sync PASS; all four inference judges PASS on the merged tree.
+π0.5, GR00T and OFT; patch sync PASS; all four inference judges PASS N0 on this repository (rollout-step P50 speed-up π0.5 2.97×, GR00T 2.82×,
+OpenVLA-OFT 1.70× at batch 8; π0.5 flow-noise 1.59× at batch 40).
+
+## Setup
+
+faster-rlinf has the dependencies of RLinf 2348ece; install it the way RLinf documents, one environment per model,
+for example `bash requirements/install.sh embodied --model openpi --env libero` (likewise `--model openvla-oft`,
+`--model gr00t`; add `--no-root` if the system packages are already present and you cannot run `apt`). The numbers
+above were measured with CPython 3.11.15, torch 2.11.0+cu130 and flash-attn 2.8.3; the OpenVLA-OFT environment used
+the openvla-oft stack (transformers 4.40.1 fork `moojink/transformers-openvla-oft` @ bc339d9, `moojink/openvla-oft`
+@ e4287e9), the GR00T environment Isaac-GR00T `n1.5-release` @ 4af2b62 with transformers 4.51.3.
+
+Checkpoints (Hugging Face, revision):
+
+| Model | Checkpoint | Used by |
+|---|---|---|
+| π0.5 | `RLinf/RLinf-Pi05-LIBERO-130-fullshot-SFT` @ 6222623 | end-to-end π0.5, judge `pi05-rl` |
+| π0.5 | `RLinf/RLinf-Pi05-ManiSkill-25Main-SFT` @ eb0e2c9 | judge `pi05-rln` |
+| OpenVLA-OFT | `Haozhan72/Openvla-oft-SFT-libero10-traj1` @ 679a2cc | end-to-end OFT, judge `oft-rl` |
+| GR00T N1.5 | `RLinf/RLinf-Gr00t-SFT-Spatial` @ 73f710e | end-to-end GR00T, judge `gr00t-rl` |
+
+The scripts in `faster_rlinf_bench/` read `FRL_ASSETS`, a directory with `venv/` (π0.5), `venv-oft/`, `venv-gr00t/`
+and `weights/<checkpoint name>/`.
 
 ## Reproducing
 
 ```bash
+# policy inference: one frozen judge on this tree (see faster_rlinf_bench/judges/README.md for the reference tree)
+faster_rlinf_bench/judges/fetch_numerics.sh     # once: ResearchBoost-Agent's numerics/ into every judge
+cd faster_rlinf_bench/judges/oft-rl && python bench/bench.py check --tree ../../.. --out out/check --fresh-reference && cd -
+
 # environment: bitwise + timing, upstream vs faster-rlinf
 faster_rlinf_bench/env_run.sh <upstream-tree> <python> bench --out out/ref  --epochs 4 --digest-all 1 --policy-ms 150
 faster_rlinf_bench/env_run.sh <this-tree>     <python> bench --out out/cand --epochs 4 --digest-all 1 --policy-ms 150

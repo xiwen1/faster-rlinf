@@ -1,0 +1,151 @@
+{
+ "batches": {
+  "1": {
+   "p50_ms": 68.422,
+   "p50_ms_runs": [
+    67.7591,
+    67.0057,
+    69.6523,
+    67.022,
+    68.5639,
+    71.6965,
+    68.631,
+    67.0423
+   ],
+   "spread": 0.07,
+   "null_speedup": [
+    0.9863,
+    0.9664
+   ],
+   "window_spreads": [
+    0.0079,
+    0.0053,
+    0.0025,
+    0.013,
+    0.0222,
+    0.0059,
+    0.0032,
+    0.004
+   ],
+   "digests": [
+    "8e17c0c27ba5012fc3da828951034ed4beb8fd371f808546092350572ebac023",
+    "50c81c2e4ee6b70b97a527f83744ca892fdcc7dea8d7aa1a1157113b5d411c8e",
+    "1f41412aa8cca4dcab1b6d6e6ef6306f68bf870f558335c2ad6f26f4936af24b",
+    "9155024b0b850fe930f77c514a93169efbb2063790a7245f17aa0472dd84a43e",
+    "82b24b5c7f005ff1f5d95f93d398a4edebfeaf35fc5f4917f2584c361c2c2eeb"
+   ]
+  },
+  "8": {
+   "p50_ms": 103.206,
+   "p50_ms_runs": [
+    103.1268,
+    100.6961,
+    103.7798,
+    100.2919,
+    104.3405,
+    107.5791,
+    101.3825,
+    104.4528
+   ],
+   "spread": 0.0727,
+   "null_speedup": [
+    0.9948,
+    0.9992
+   ],
+   "window_spreads": [
+    0.0087,
+    0.0018,
+    0.0052,
+    0.0041,
+    0.003,
+    0.0059,
+    0.0027,
+    0.0079
+   ],
+   "digests": [
+    "6fb080746556e2fefec56bc82dca5ff21ae6e708a9ca8dc63f86ff21cc7e79f3",
+    "b0e0017c098bc275b33fa69b659ac211d3140914e15b369803e9658727fb003c",
+    "cab8b60abc0aa644d3f35e78b8ca8760d1dee27678462b004fbf964f5fd8b62e",
+    "c9a428dea0f47028f689b889b2bf910f4aed4cad49ac5a98bf94f6e961e3d722",
+    "10ced2de50a8cea62b352d034e5fe47b6e643442375223982eb60a699fa58aa8",
+    "45491eab8883df11881335cc2a8767d97bc35f05118aa04b02b9ab1cce0ab349",
+    "d23a2b82b3dc65212177217224554cde5eaafe1af6a6b66726c89e394f9366da",
+    "c1b5f1a2b5d5b445953f4badf04663f08991cc1dcb12a2c9fab5bb91e1e807f1"
+   ]
+  }
+ },
+ "rng_after": "6004aa2845d3e1c8a67a7a66",
+ "build_s_runs": [
+  26.645,
+  26.324,
+  27.399,
+  26.11,
+  26.585,
+  26.421,
+  25.761,
+  26.058
+ ],
+ "warmup_s_runs": [
+  6.627,
+  6.73,
+  6.749,
+  6.585,
+  6.843,
+  6.829,
+  6.893,
+  6.642
+ ],
+ "peak_memory_allocated_gib": 6.652,
+ "fingerprint": {
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "python": "3.11.15",
+  "gpu": "<removed>, 580.126.09",
+  "math_mode": {
+   "matmul.allow_tf32": false,
+   "cudnn.allow_tf32": true,
+   "float32_matmul_precision": "highest",
+   "matmul.fp16_reduced_precision_reduction": true,
+   "matmul.bf16_reduced_precision_reduction": true,
+   "sdp.flash": true,
+   "sdp.mem_efficient": true,
+   "sdp.math": true,
+   "cudnn.deterministic": false,
+   "deterministic_algorithms": false
+  },
+  "host": "host-b",
+  "warmup": 20,
+  "batches": [
+   8,
+   1
+  ],
+  "obs_seed": 7,
+  "seed": 0
+ },
+ "hosts": [
+  "host-b"
+ ],
+ "plan": {
+  "warmup": 20,
+  "seed": 0,
+  "obs_seed": 7,
+  "plan": [
+   {
+    "batch": 8,
+    "windows": 8,
+    "window_iters": 25
+   },
+   {
+    "batch": 1,
+    "windows": 5,
+    "window_iters": 30
+   }
+  ],
+  "frozen_band": 0.15,
+  "window_band": 0.04,
+  "window_band_candidate": 0.06,
+  "cpus": 8,
+  "cpu_sample_s": 2.0,
+  "nice": -5
+ }
+}

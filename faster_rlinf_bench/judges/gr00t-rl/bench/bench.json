@@ -1,0 +1,128 @@
+{
+ "task": "GR00T N1.5 RL rollout step latency: RLinf GR00T_N1_5_ForRLActionPrediction.predict_action_batch(env_obs, mode='train') (flow_sde, noise level 0.5, 4 denoising steps) at batch 8 (RLinf 2348ece snapshot, model/gr00t.yaml with the libero_spatial_ppo_gr00t overrides: bf16, two 256x256 LIBERO cameras, 5 action chunks x 7 dims, prompt padded to 570 tokens, value head; checkpoint RLinf/RLinf-Gr00t-SFT-Spatial), one B200",
+ "reference": "targets/reference",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "python": "$ASSETS/venv-gr00t/bin/python",
+ "weights": "$ASSETS/weights/RLinf-Gr00t-SFT-Spatial",
+ "goal": {
+  "metric": "batch-8 rollout step P50 latency",
+  "primary_batch": 8,
+  "target_speedup": 2.0,
+  "minimum_speedup": 1.5
+ },
+ "agent_max_tier": "N0",
+ "entry_points": [
+  {
+   "file": "rlinf/models/embodiment/gr00t/__init__.py",
+   "function": "get_model"
+  },
+  {
+   "file": "rlinf/models/embodiment/gr00t/gr00t_n1d5/__init__.py",
+   "function": "get_model"
+  },
+  {
+   "file": "rlinf/models/embodiment/gr00t/gr00t_n1d5/gr00t_action_model.py",
+   "class": "GR00T_N1_5_ForRLActionPrediction",
+   "function": "predict_action_batch"
+  },
+  {
+   "file": "rlinf/models/embodiment/gr00t/gr00t_n1d5/gr00t_action_model.py",
+   "class": "GR00T_N1_5_ForRLActionPrediction",
+   "function": "forward"
+  },
+  {
+   "file": "rlinf/models/embodiment/gr00t/gr00t_n1d5/gr00t_action_model.py",
+   "class": "GR00T_N1_5_ForRLActionPrediction",
+   "function": "default_forward"
+  }
+ ],
+ "numerics": {
+  "adapter": "bench.rl_adapter:GR00TRLAdapter",
+  "cases": "bench/cases.json",
+  "ref": "task/records/ref",
+  "thresholds": "task/thresholds.json",
+  "deterministic": false
+ },
+ "timing": {
+  "warmup": 20,
+  "seed": 0,
+  "obs_seed": 7,
+  "plan": [
+   {
+    "batch": 8,
+    "windows": 8,
+    "window_iters": 25
+   },
+   {
+    "batch": 1,
+    "windows": 5,
+    "window_iters": 30
+   }
+  ],
+  "frozen_band": 0.15,
+  "window_band": 0.04,
+  "window_band_candidate": 0.06,
+  "cpus": 8,
+  "cpu_sample_s": 2.0,
+  "nice": -5
+ },
+ "benefit": {
+  "min_speedup": 1.1
+ },
+ "idle": {
+  "max_memory_mib": 2000,
+  "max_util": 10
+ },
+ "fixed_env": {
+  "OMP_NUM_THREADS": "8",
+  "MKL_NUM_THREADS": "8",
+  "TOKENIZERS_PARALLELISM": "false"
+ },
+ "timeouts_s": {
+  "ready": 1200,
+  "window": 600,
+  "profile": 1500,
+  "numerics": 2400
+ },
+ "reserved_env": [
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "TORCHINDUCTOR_CACHE_DIR",
+  "TRITON_CACHE_DIR",
+  "CUDA_CACHE_PATH",
+  "XDG_CACHE_HOME",
+  "MPLCONFIGDIR",
+  "CUDA_VISIBLE_DEVICES",
+  "CUDA_DEVICE_ORDER",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "PYTHONNOUSERSITE",
+  "PYTHONHASHSEED",
+  "HF_HOME",
+  "HF_HUB_OFFLINE",
+  "TRANSFORMERS_OFFLINE",
+  "OPENPI_DATA_HOME",
+  "ROBOT_PLATFORM",
+  "NVIDIA_TF32_OVERRIDE",
+  "CUBLAS_WORKSPACE_CONFIG",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "OMP_NUM_THREADS",
+  "MKL_NUM_THREADS",
+  "TOKENIZERS_PARALLELISM",
+  "PATH",
+  "HOME",
+  "HF_MODULES_CACHE"
+ ],
+ "invalid_run_signatures": [
+  {
+   "regex": "hit config\\.(recompile_limit|cache_size_limit)",
+   "reason": "torch.compile hit the recompile limit: that code runs eager from then on, not the configuration requested"
+  },
+  {
+   "regex": "skipping cudagraphs due to",
+   "reason": "CUDA graphs were requested but skipped: the run measured the path without graphs"
+  }
+ ]
+}

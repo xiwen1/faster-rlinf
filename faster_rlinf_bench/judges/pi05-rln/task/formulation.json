@@ -1,0 +1,28 @@
+{
+ "task": "pi0.5 RL rollout step latency with flow_noise and joint log-probabilities: RLinf Pi0RL.predict_action_batch(mode=\"train\") at batch 40 (RLinf 2348ece snapshot, pi0_5 with the maniskill_ppo_openpi_pi05 overrides: pi05_maniskill, one 480x640 image, flow_noise with the noise head, joint_logprob, 4 steps, action horizon 8, value head after the VLM, checkpoint RLinf/RLinf-Pi05-ManiSkill-25Main-SFT), one B200",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "evaluator_sha256": "ac3a4fcb94c0846a4877a55d4e3f2c61f321d62a2b7debee487af4abbf93b825",
+ "inputs": {
+  "$ASSETS/weights/RLinf-Pi05-ManiSkill-25Main-SFT/model.safetensors": {
+   "kind": "stat",
+   "value": "7473091464:1794162358737659264"
+  },
+  "$ASSETS/weights/RLinf-Pi05-ManiSkill-25Main-SFT/physical-intelligence/maniskill/norm_stats.json": {
+   "kind": "sha256",
+   "value": "67a6e551d2d31140362984b7e7ac7bfe22162545fb498ac803fa38085ed3a089"
+  },
+  "$WORK/pi05-rln/home/.cache/openpi/big_vision/paligemma_tokenizer.model": {
+   "kind": "sha256",
+   "value": "8986bb4f423f07f8c7f70d0dbe3526fb2316056c17bae71b1ea975e77a168fc6"
+  }
+ },
+ "records": "task/records/ref",
+ "timing_ref": "task/timing_ref.json",
+ "precision_floor": "N0",
+ "goal": {
+  "metric": "batch-40 rollout step P50 latency",
+  "primary_batch": 40,
+  "target_speedup": 1.5,
+  "minimum_speedup": 1.25
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "task": "OpenVLA-OFT RL rollout step latency: RLinf OpenVLAOFTForRLActionPrediction.predict_action_batch with the train sampling parameters (do_sample, temperature 1.6) at batch 8 (RLinf 2348ece snapshot, model/openvla_oft.yaml with the libero_10_grpo_openvlaoft overrides: bf16, one 256x256 LIBERO image, 8 action chunks x 7 dims, prompt padded to 128, no value head; checkpoint Haozhan72/Openvla-oft-SFT-libero10-traj1), one B200",
+ "reference": "targets/reference",
+ "reference_commit": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+ "python": "$ASSETS/venv-oft/bin/python",
+ "weights": "$ASSETS/weights/Openvla-oft-SFT-libero10-traj1",
+ "goal": {
+  "metric": "batch-8 rollout step P50 latency",
+  "primary_batch": 8,
+  "target_speedup": 1.4,
+  "minimum_speedup": 1.2
+ },
+ "agent_max_tier": "N0",
+ "entry_points": [
+  {
+   "file": "rlinf/models/embodiment/openvla_oft/__init__.py",
+   "function": "get_model"
+  },
+  {
+   "file": "rlinf/models/embodiment/openvla_oft/rlinf/__init__.py",
+   "function": "get_model"
+  },
+  {
+   "file": "rlinf/models/embodiment/openvla_oft/rlinf/openvla_oft_action_model.py",
+   "class": "OpenVLAOFTForRLActionPrediction",
+   "function": "predict_action_batch"
+  },
+  {
+   "file": "rlinf/models/embodiment/openvla_oft/rlinf/openvla_oft_action_model.py",
+   "class": "OpenVLAOFTForRLActionPrediction",
+   "function": "forward"
+  },
+  {
+   "file": "rlinf/models/embodiment/openvla_oft/rlinf/openvla_oft_action_model.py",
+   "class": "OpenVLAOFTForRLActionPrediction",
+   "function": "default_forward"
+  }
+ ],
+ "numerics": {
+  "adapter": "bench.rl_adapter:OFTRLAdapter",
+  "cases": "bench/cases.json",
+  "ref": "task/records/ref",
+  "thresholds": "task/thresholds.json",
+  "deterministic": false
+ },
+ "timing": {
+  "warmup": 20,
+  "seed": 0,
+  "obs_seed": 7,
+  "plan": [
+   {
+    "batch": 8,
+    "windows": 8,
+    "window_iters": 25
+   },
+   {
+    "batch": 1,
+    "windows": 5,
+    "window_iters": 40
+   }
+  ],
+  "frozen_band": 0.15,
+  "window_band": 0.04,
+  "window_band_candidate": 0.06,
+  "cpus": 8,
+  "cpu_sample_s": 2.0,
+  "nice": -5
+ },
+ "benefit": {
+  "min_speedup": 1.1
+ },
+ "idle": {
+  "max_memory_mib": 2000,
+  "max_util": 10
+ },
+ "fixed_env": {
+  "OMP_NUM_THREADS": "8",
+  "MKL_NUM_THREADS": "8",
+  "TOKENIZERS_PARALLELISM": "false"
+ },
+ "timeouts_s": {
+  "ready": 1200,
+  "window": 600,
+  "profile": 1500,
+  "numerics": 2400
+ },
+ "reserved_env": [
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "TORCHINDUCTOR_CACHE_DIR",
+  "TRITON_CACHE_DIR",
+  "CUDA_CACHE_PATH",
+  "XDG_CACHE_HOME",
+  "MPLCONFIGDIR",
+  "CUDA_VISIBLE_DEVICES",
+  "CUDA_DEVICE_ORDER",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "PYTHONNOUSERSITE",
+  "PYTHONHASHSEED",
+  "HF_HOME",
+  "HF_HUB_OFFLINE",
+  "TRANSFORMERS_OFFLINE",
+  "OPENPI_DATA_HOME",
+  "ROBOT_PLATFORM",
+  "NVIDIA_TF32_OVERRIDE",
+  "CUBLAS_WORKSPACE_CONFIG",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "OMP_NUM_THREADS",
+  "MKL_NUM_THREADS",
+  "TOKENIZERS_PARALLELISM",
+  "PATH",
+  "HOME",
+  "HF_MODULES_CACHE"
+ ],
+ "invalid_run_signatures": [
+  {
+   "regex": "hit config\\.(recompile_limit|cache_size_limit)",
+   "reason": "torch.compile hit the recompile limit: that code runs eager from then on, not the configuration requested"
+  },
+  {
+   "regex": "skipping cudagraphs due to",
+   "reason": "CUDA graphs were requested but skipped: the run measured the path without graphs"
+  }
+ ]
+}
