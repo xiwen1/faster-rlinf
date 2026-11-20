@@ -14,7 +14,7 @@ sleep 20  # stagger Ray start-up
 CUDA_VISIBLE_DEVICES=$GC "$HERE/run_e2e.sh" "$MODEL" "$CAND" "$P-cand" "$NE" "$@" & PC=$!
 wait $PR; RR=$?; wait $PC; RC=$?
 echo "ref rc=$RR cand rc=$RC"
-"${FRL_ASSETS:-/path/to/assets}/venv/bin/python" \
+"${FRL_ASSETS:?set FRL_ASSETS to the assets dir, see FASTER_RLINF.md}/venv/bin/python" \
   "$HERE/analyze_e2e.py" "${FRL_E2E_OUT:-$HERE/runs}/$P-ref" "${FRL_E2E_OUT:-$HERE/runs}/$P-cand" \
   > "${FRL_E2E_OUT:-$HERE/runs}/$P-summary.md" 2>&1
 cat "${FRL_E2E_OUT:-$HERE/runs}/$P-summary.md"

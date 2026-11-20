@@ -4,7 +4,7 @@
 set -u
 MODEL=$1; REF=$2; CAND=$3; OUT=$4; N=${5:-24}
 HERE=$(cd "$(dirname "$0")" && pwd)
-A=${FRL_ASSETS:-/path/to/assets}
+A=${FRL_ASSETS:?set FRL_ASSETS to the assets dir, see FASTER_RLINF.md}
 case $MODEL in
   pi05)  PY=$A/venv/bin/python;       WT=$A/weights/RLinf-Pi05-LIBERO-130-fullshot-SFT ;;
   oft)   PY=$A/venv-oft/bin/python;   WT=$A/weights/Openvla-oft-SFT-libero10-traj1 ;;

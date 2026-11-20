@@ -4,13 +4,13 @@
 # load (8 envs and global_batch_size/8 per GPU); everything else is the stock config.
 #
 # Usage: run_e2e.sh <pi05|oft|gr00t> <tree> <tag> <iterations> [extra hydra overrides...]
-# Env:   FRL_ASSETS  dir with venv/ venv-oft/ venv-gr00t/ weights/  (default: researchboost assets)
+# Env:   FRL_ASSETS  dir with venv/ venv-oft/ venv-gr00t/ weights/  (required)
 #        FRL_E2E_OUT output root (default: <this dir>/runs)
 # Output: $FRL_E2E_OUT/<tag>/{meta.txt,train.log,logs/,loadavg.txt}; then run dump_tb.py on it.
 set -u
 MODEL=$1; TREE=$(cd "$2" && pwd); TAG=$3; NE=$4; shift 4
 HERE=$(cd "$(dirname "$0")" && pwd)
-A=${FRL_ASSETS:-/path/to/assets}
+A=${FRL_ASSETS:?set FRL_ASSETS to the assets dir, see FASTER_RLINF.md}
 OUT=${FRL_E2E_OUT:-$HERE/runs}
 RUN=$OUT/$TAG
 mkdir -p "$RUN"

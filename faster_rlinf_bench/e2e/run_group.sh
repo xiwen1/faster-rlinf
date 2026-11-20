@@ -15,7 +15,7 @@
 set -u
 MODEL=$1; NE=$2; P=$3; shift 3
 HERE=$(cd "$(dirname "$0")" && pwd)
-A=${FRL_ASSETS:-/path/to/assets}
+A=${FRL_ASSETS:?set FRL_ASSETS to the assets dir, see FASTER_RLINF.md}
 OUT=${FRL_E2E_OUT:-$HERE/runs}
 GD=$OUT/$P-group
 IFS=, read -ra GL <<< "${CUDA_VISIBLE_DEVICES:?}"
