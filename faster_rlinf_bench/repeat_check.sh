@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run repeat_check.py for one model: upstream tree (ref) then candidate tree (cand), then compare.
-# Usage: repeat_check.sh <pi05|oft|gr00t> <upstream_tree> <cand_tree> <out_dir> [steps]
+# Usage: repeat_check.sh <pi05|oft|gr00t> <upstream_tree> <cand_tree> <out_dir (absolute)> [steps]
 set -u
 MODEL=$1; REF=$2; CAND=$3; OUT=$4; N=${5:-24}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -9,8 +9,9 @@ case $MODEL in
   pi05)  PY=$A/venv/bin/python;       WT=$A/weights/RLinf-Pi05-LIBERO-130-fullshot-SFT ;;
   oft)   PY=$A/venv-oft/bin/python;   WT=$A/weights/Openvla-oft-SFT-libero10-traj1 ;;
   gr00t) PY=$A/venv-gr00t/bin/python; WT=$A/weights/RLinf-Gr00t-SFT-Spatial ;;
+  *) echo "usage: repeat_check.sh <pi05|oft|gr00t> <upstream_tree> <cand_tree> <out_dir (absolute)> [steps]"; exit 2 ;;
 esac
-mkdir -p "$OUT"; export HF_HOME=$OUT/hf_home HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+mkdir -p "$OUT"; export HF_HOME=$OUT/hf_home
 for side in ref cand; do
   T=$REF; [ $side = cand ] && T=$CAND
   (cd "$OUT" && "$PY" "$HERE/repeat_check.py" --workload "$HERE/workloads/$MODEL/workload.py" --tree "$T" \

@@ -25,13 +25,12 @@ esac
 PY=$PYV/bin/python
 export EMBODIED_PATH=$TREE/examples/embodiment PYTHONPATH=$TREE
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl ROBOT_PLATFORM=LIBERO LIBERO_TYPE=standard
-export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com} HF_HOME=$RUN/hf_home
+export HF_HOME=$RUN/hf_home
 export RAY_TMPDIR=/tmp/frle2e-$TAG RAY_AUTH_MODE=disabled
 export TORCHINDUCTOR_CACHE_DIR=$RUN/inductor
 # RLinf maps placement ranks to physical GPU ids: place exactly on the leased GPUs.
 if [ "$G" -eq 1 ]; then PL=${GL[0]}; else PL=${GL[0]}-${GL[$((G-1))]}; [ $((GL[G-1]-GL[0]+1)) -eq "$G" ] || { echo "non-contiguous GPUs $CUDA_VISIBLE_DEVICES"; exit 3; }; fi
 export PATH=$PYV/bin:$A/venv/bin:$PATH
-[ -d "$A/guard-bin" ] && export PATH=$A/guard-bin:$PATH
 mkdir -p "$RAY_TMPDIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME"
 # Private Ray head on a port block derived from the first GPU id, so runs on one node do not join each other.
 B=$((21000 + ${GL[0]} * 1000))

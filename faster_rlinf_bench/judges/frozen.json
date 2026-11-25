@@ -1,0 +1,43 @@
+{
+ "about": "Facts about the frozen judges that the published copies cannot carry themselves; read by localize.py. bench_json_sha256: sha256 of bench/bench.json as frozen (it differs from the published copy only in the values of \"python\" and \"weights\", which were machine paths). weights_sha256: sha256 of the checkpoint files the judges checked by size and modification time; each equals the LFS sha256 Hugging Face lists for that file at the pinned revision.",
+ "reference": {
+  "repository": "https://github.com/RLinf/RLinf",
+  "commit": "2348ece3df113874671478be1360ae3115b346e3",
+  "frozen_snapshot": "ec8a5f66c68fa721cf1afd28ca37f488a8aa91bf",
+  "snapshot_note": "the judges were frozen on an internal snapshot of upstream RLinf whose rlinf/ tree equals 2348ece's apart from three apxinf files that no judge imports; the snapshot commit is not public"
+ },
+ "judges": {
+  "pi05-rl": {
+   "bench_json_sha256": "55ad52ebd9a7221aa360a0cb7140c7537b45eaa70793340e46e75f4f9017edc6",
+   "checkpoint": {"repo": "RLinf/RLinf-Pi05-LIBERO-130-fullshot-SFT", "revision": "6222623f635769bfc73c9472e29fab9b7fd8e027"},
+   "weights_sha256": {
+    "RLinf-Pi05-LIBERO-130-fullshot-SFT/model.safetensors": "4d9089c941793f170b625c2ed0ac7a3aa09b6f103e52dbbc82e67301529d6683"
+   }
+  },
+  "pi05-rln": {
+   "bench_json_sha256": "63dab785a9aa122f952e1254502d96c0495ffee5e563f9512d658b0f72395c4a",
+   "checkpoint": {"repo": "RLinf/RLinf-Pi05-ManiSkill-25Main-SFT", "revision": "eb0e2c90726f7f0bdf99e8c9b6656917f0eb5030"},
+   "weights_sha256": {
+    "RLinf-Pi05-ManiSkill-25Main-SFT/model.safetensors": "9877be1633a9bc89834d00ef890e1a4cd34a91c155d710b97c92fbab8a5caa89"
+   }
+  },
+  "oft-rl": {
+   "bench_json_sha256": "258bb1214e78fc754a353623792df08f453f541f88c3548f7e84b283bc82b319",
+   "checkpoint": {"repo": "Haozhan72/Openvla-oft-SFT-libero10-traj1", "revision": "679a2cc1504b905e6cd954a46c80a9408a8ba3e0"},
+   "weights_sha256": {
+    "Openvla-oft-SFT-libero10-traj1/model-00001-of-00004.safetensors": "66231d95740d5fe3f65912b0df579dfbfdbc4ae4d1894768ac237196d20a257d",
+    "Openvla-oft-SFT-libero10-traj1/model-00002-of-00004.safetensors": "ea9e0f4b2b1806195cc622725ec05b946dffcdf919b311184f3b662cf32281c0",
+    "Openvla-oft-SFT-libero10-traj1/model-00003-of-00004.safetensors": "cd27e6ae04b29015b05d18914b27217dd02520cc4ddc95ac9473785b7e534669",
+    "Openvla-oft-SFT-libero10-traj1/model-00004-of-00004.safetensors": "2f9b6d1b3dd99b9a6d35d3b6ef9a7e154e7e310a40bc168948769fe9701db2c9"
+   }
+  },
+  "gr00t-rl": {
+   "bench_json_sha256": "80b8aa9b6cf753d44c9265f81885da4b78fee68e357487098fbf1c83182e0f4d",
+   "checkpoint": {"repo": "RLinf/RLinf-Gr00t-SFT-Spatial", "revision": "73f710e70e7d571f8d828e51e0a428f5a1e0ac22"},
+   "weights_sha256": {
+    "RLinf-Gr00t-SFT-Spatial/model-00001-of-00002.safetensors": "e8e38e607765f47658ba2ccac8c7b311e57bafc58dd8490a143332c01e929556",
+    "RLinf-Gr00t-SFT-Spatial/model-00002-of-00002.safetensors": "ce44c6277867741d906c3b25d281ea645edf78b0c5b8454d3c69e1a4ed6458eb"
+   }
+  }
+ }
+}

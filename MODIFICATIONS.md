@@ -1,7 +1,8 @@
 # Modifications to upstream RLinf
 
 This fork is based on RLinf commit `2348ece3df113874671478be1360ae3115b346e3` (Apache-2.0).
-As required by section 4(b) of the Apache License 2.0, the files below were changed or added by faster-rlinf.
+As required by section 4(b) of the Apache License 2.0, the files below were changed or added by faster-rlinf
+(the added directory `faster_rlinf_bench/judges/` is one row).
 `git diff 2348ece HEAD -- <file>` shows each change; `git log 2348ece..HEAD` explains why.
 
 | Status | File |
@@ -18,6 +19,7 @@ As required by section 4(b) of the Apache License 2.0, the files below were chan
 | added | `faster_rlinf_bench/env_compare.py` |
 | added | `faster_rlinf_bench/env_run.sh` |
 | added | `faster_rlinf_bench/gen_modifications.py` |
+| added | `faster_rlinf_bench/judges/` (99 files: the four frozen rollout judges, see its README.md) |
 | added | `faster_rlinf_bench/patch_check.py` |
 | added | `faster_rlinf_bench/repeat_check.py` |
 | added | `faster_rlinf_bench/repeat_check.sh` |

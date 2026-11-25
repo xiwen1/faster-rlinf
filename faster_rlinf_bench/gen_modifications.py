@@ -4,25 +4,36 @@ import sys
 
 BASE = "2348ece3df113874671478be1360ae3115b346e3"
 SKIP = {"MODIFICATIONS.md"}
+JUDGES = "faster_rlinf_bench/judges/"  # added as a whole; listed as one row
 names = {"M": "modified", "A": "added", "D": "deleted", "R": "renamed"}
 out = subprocess.check_output(["git", "diff", "--name-status", BASE, "HEAD"], text=True)
 lines = [
     "# Modifications to upstream RLinf",
     "",
     f"This fork is based on RLinf commit `{BASE}` (Apache-2.0).",
-    "As required by section 4(b) of the Apache License 2.0, the files below were changed or added by faster-rlinf.",
+    "As required by section 4(b) of the Apache License 2.0, the files below were changed or added by faster-rlinf",
+    "(the added directory `faster_rlinf_bench/judges/` is one row).",
     f"`git diff {BASE[:7]} HEAD -- <file>` shows each change; `git log {BASE[:7]}..HEAD` explains why.",
     "",
     "| Status | File |",
     "|---|---|",
 ]
+judges = []
 for line in out.splitlines():
     if not line.strip():
         continue
     status, path = line.split("\t", 1)
     if path in SKIP:
         continue
+    if path.startswith(JUDGES) and status == "A":
+        if not judges:
+            judges_row = len(lines)
+            lines.append(None)
+        judges.append(path)
+        continue
     lines.append(f"| {names.get(status[0], status)} | `{path}` |")
+if judges:
+    lines[judges_row] = f"| added | `{JUDGES}` ({len(judges)} files: the four frozen rollout judges, see its README.md) |"
 open("MODIFICATIONS.md", "w").write("\n".join(lines) + "\n")
 
 if len(sys.argv) > 1 and sys.argv[1] == "--readme":
